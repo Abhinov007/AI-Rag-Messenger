@@ -1,9 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
+import {
+  getCurrentUser,
+  login,
+  logout,
+  signup,
+} from './src/services/authStorage';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -19,6 +26,26 @@ const AppStack = createNativeStackNavigator<AppStackParamList>();
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+
+  useEffect(() => {
+    getCurrentUser()
+      .then((user) => setIsAuthenticated(Boolean(user)))
+      .finally(() => setIsCheckingSession(false));
+  }, []);
+
+  async function handleLogout() {
+    await logout();
+    setIsAuthenticated(false);
+  }
+
+  if (isCheckingSession) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator color="#25D366" size="large" />
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>
@@ -28,7 +55,7 @@ export default function App() {
             {(props) => (
               <ChatListScreen
                 {...props}
-                onLogout={() => setIsAuthenticated(false)}
+                onLogout={handleLogout}
               />
             )}
           </AppStack.Screen>
@@ -39,7 +66,14 @@ export default function App() {
             {(props) => (
               <LoginScreen
                 {...props}
-                onLoginSuccess={() => setIsAuthenticated(true)}
+                onLogin={async (email, password) => {
+                  const result = await login(email, password);
+                  if (result.ok) {
+                    setIsAuthenticated(true);
+                  }
+
+                  return result;
+                }}
               />
             )}
           </AuthStack.Screen>
@@ -47,7 +81,14 @@ export default function App() {
             {(props) => (
               <SignupScreen
                 {...props}
-                onSignupSuccess={() => setIsAuthenticated(true)}
+                onSignup={async (name, email, password) => {
+                  const result = await signup(name, email, password);
+                  if (result.ok) {
+                    setIsAuthenticated(true);
+                  }
+
+                  return result;
+                }}
               />
             )}
           </AuthStack.Screen>
@@ -56,3 +97,12 @@ export default function App() {
     </NavigationContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    alignItems: 'center',
+    backgroundColor: '#071A14',
+    flex: 1,
+    justifyContent: 'center',
+  },
+});

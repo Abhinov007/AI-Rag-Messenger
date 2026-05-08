@@ -14,10 +14,14 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../App';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Signup'> & {
-  onSignupSuccess: () => void;
+  onSignup: (
+    name: string,
+    email: string,
+    password: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 };
 
-export default function SignupScreen({ navigation, onSignupSuccess }: Props) {
+export default function SignupScreen({ navigation, onSignup }: Props) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,7 +29,7 @@ export default function SignupScreen({ navigation, onSignupSuccess }: Props) {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSignup() {
+  async function handleSignup() {
     if (
       !name.trim() ||
       !email.trim() ||
@@ -43,10 +47,14 @@ export default function SignupScreen({ navigation, onSignupSuccess }: Props) {
 
     setError('');
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
+      const result = await onSignup(name, email, password);
+      if (!result.ok) {
+        setError(result.error);
+      }
+    } finally {
       setIsSubmitting(false);
-      onSignupSuccess();
-    }, 350);
+    }
   }
 
   return (

@@ -14,16 +14,19 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../App';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'> & {
-  onLoginSuccess: () => void;
+  onLogin: (
+    email: string,
+    password: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 };
 
-export default function LoginScreen({ navigation, onLoginSuccess }: Props) {
+export default function LoginScreen({ navigation, onLogin }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleLogin() {
+  async function handleLogin() {
     if (!email.trim() || !password.trim()) {
       setError('Enter your email and password to continue.');
       return;
@@ -31,10 +34,14 @@ export default function LoginScreen({ navigation, onLoginSuccess }: Props) {
 
     setError('');
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
+      const result = await onLogin(email, password);
+      if (!result.ok) {
+        setError(result.error);
+      }
+    } finally {
       setIsSubmitting(false);
-      onLoginSuccess();
-    }, 350);
+    }
   }
 
   return (
@@ -52,6 +59,9 @@ export default function LoginScreen({ navigation, onLoginSuccess }: Props) {
           <Text style={styles.title}>Welcome back</Text>
           <Text style={styles.subtitle}>
             Sign in to continue your AI-powered messaging workspace.
+          </Text>
+          <Text style={styles.helperText}>
+            Demo: demo@airag.app / password123
           </Text>
 
           <View style={styles.form}>
@@ -143,7 +153,13 @@ const styles = StyleSheet.create({
     color: '#B7C8C0',
     fontSize: 16,
     lineHeight: 24,
-    marginBottom: 30,
+    marginBottom: 12,
+  },
+  helperText: {
+    color: '#D9FFF0',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 24,
   },
   form: {
     gap: 14,
