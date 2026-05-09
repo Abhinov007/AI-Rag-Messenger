@@ -1,45 +1,116 @@
 /**
- * Starter data for local development.
+ * Dummy conversation data for local development.
  *
  * This gives the chat list something real to render from SQLite before the app
- * has a create-chat screen.
+ * has a create-chat screen. A row in `seed_history` prevents the seed from
+ * running more than once.
  */
-import { createConversation, listConversations } from './conversationRepository';
-import { addMessage } from './messageRepository';
+import type { SQLiteDatabase } from 'expo-sqlite';
 
 /**
- * Inserts demo conversations only when the database is empty.
+ * Inserts three dummy conversations and their messages only once.
  */
-export async function seedStarterConversations() {
-  const existingConversations = await listConversations();
+export async function seedDummyConversations(db: SQLiteDatabase) {
+  const existingSeed = await db.getFirstAsync<{ seed_key: string }>(
+    'SELECT seed_key FROM seed_history WHERE seed_key = ?;',
+    'dummy_conversations_v1',
+  );
 
-  if (existingConversations.length > 0) {
+  if (existingSeed) {
     return;
   }
 
-  const projectNotesId = await createConversation('Project Notes');
-  await addMessage(
-    projectNotesId,
-    'system',
-    'Local summaries and smart reply testing will live here.',
-  );
-  await addMessage(
-    projectNotesId,
-    'assistant',
-    'Conversation tables are ready for message history and future RAG lookup.',
-  );
-
-  const familyId = await createConversation('Family');
-  await addMessage(
-    familyId,
+  const rahulId = await createSeedConversation(db, 'Rahul');
+  await createSeedMessage(
+    db,
+    rahulId,
     'user',
-    'Placeholder chat thread for the next messaging step.',
+    'Can you check the deployment issue?',
+  );
+  await createSeedMessage(
+    db,
+    rahulId,
+    'assistant',
+    'I will review the logs and compare the latest build config.',
+  );
+  await createSeedMessage(
+    db,
+    rahulId,
+    'user',
+    'The API health check started failing after the last push.',
   );
 
-  const workId = await createConversation('Work');
-  await addMessage(
-    workId,
+  const amanId = await createSeedConversation(db, 'Aman');
+  await createSeedMessage(
+    db,
+    amanId,
+    'user',
+    'The frontend mapping looks wrong.',
+  );
+  await createSeedMessage(
+    db,
+    amanId,
     'assistant',
-    'RAG-backed search can surface older decisions here later.',
+    'It may be using the old response keys from the API payload.',
+  );
+
+  const priyaId = await createSeedConversation(db, 'Priya');
+  await createSeedMessage(
+    db,
+    priyaId,
+    'user',
+    "Let's summarise today's meeting.",
+  );
+  await createSeedMessage(
+    db,
+    priyaId,
+    'assistant',
+    'Key points: finalize auth, persist chats, and prepare the demo flow.',
+  );
+  await createSeedMessage(
+    db,
+    priyaId,
+    'user',
+    'Please keep the action items short and clear.',
+  );
+
+  await db.runAsync(
+    'INSERT INTO seed_history (seed_key) VALUES (?);',
+    'dummy_conversations_v1',
+  );
+}
+
+async function createSeedConversation(db: SQLiteDatabase, title: string) {
+  const result = await db.runAsync(
+    'INSERT INTO conversations (title) VALUES (?);',
+    title,
+  );
+
+  return result.lastInsertRowId;
+}
+
+async function createSeedMessage(
+  db: SQLiteDatabase,
+  conversationId: number,
+  senderType: 'user' | 'assistant' | 'system',
+  body: string,
+) {
+  await db.runAsync(
+    `
+    INSERT INTO messages (conversation_id, sender_type, body)
+    VALUES (?, ?, ?);
+    `,
+    conversationId,
+    senderType,
+    body,
+  );
+
+  await db.runAsync(
+    `
+    UPDATE conversations
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?;
+    `,
+    conversationId,
   );
 }

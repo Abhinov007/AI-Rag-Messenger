@@ -2,7 +2,7 @@
  * SQLite schema setup for conversations and messages.
  *
  * Keep this file focused on table/index creation. Data access belongs in the
- * repository files, and starter demo data belongs in `seed.ts`.
+ * repository files, and dummy starter data belongs in `seed.ts`.
  */
 import type { SQLiteDatabase } from 'expo-sqlite';
 
@@ -27,6 +27,11 @@ export async function runMigrations(db: SQLiteDatabase) {
       body TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS seed_history (
+      seed_key TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_conversations_updated_at

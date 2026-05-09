@@ -1,8 +1,8 @@
 /**
  * Chat list screen.
  *
- * After authentication, this screen seeds starter conversations if needed and
- * renders the conversation list from local SQLite storage.
+ * After authentication, this screen renders the conversation list from local
+ * SQLite storage initialized by the app root.
  */
 import React, { useEffect, useState } from 'react';
 import {
@@ -16,7 +16,6 @@ import {
   View,
 } from 'react-native';
 import { listConversations } from '../db/conversationRepository';
-import { seedStarterConversations } from '../db/seed';
 import type { ConversationListItem } from '../types/conversation';
 
 type Props = {
@@ -36,7 +35,6 @@ export default function ChatListScreen({ onLogout }: Props) {
 
     async function loadConversations() {
       try {
-        await seedStarterConversations();
         const rows = await listConversations();
 
         if (isMounted) {

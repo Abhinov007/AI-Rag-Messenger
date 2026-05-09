@@ -5,6 +5,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
+import { initializeDatabase } from './src/db/database';
 import {
   getCurrentUser,
   login,
@@ -26,12 +27,20 @@ const AppStack = createNativeStackNavigator<AppStackParamList>();
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [isInitializingApp, setIsInitializingApp] = useState(true);
 
   useEffect(() => {
-    getCurrentUser()
-      .then((user) => setIsAuthenticated(Boolean(user)))
-      .finally(() => setIsCheckingSession(false));
+    async function prepareApp() {
+      try {
+        await initializeDatabase();
+        const user = await getCurrentUser();
+        setIsAuthenticated(Boolean(user));
+      } finally {
+        setIsInitializingApp(false);
+      }
+    }
+
+    prepareApp();
   }, []);
 
   async function handleLogout() {
@@ -39,7 +48,7 @@ export default function App() {
     setIsAuthenticated(false);
   }
 
-  if (isCheckingSession) {
+  if (isInitializingApp) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator color="#25D366" size="large" />
