@@ -1,5 +1,12 @@
-import React from 'react';
+/**
+ * Chat list screen.
+ *
+ * After authentication, this screen seeds starter conversations if needed and
+ * renders the conversation list from local SQLite storage.
+ */
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Pressable,
   SafeAreaView,
@@ -8,33 +15,52 @@ import {
   Text,
   View,
 } from 'react-native';
+import { listConversations } from '../db/conversationRepository';
+import { seedStarterConversations } from '../db/seed';
+import type { ConversationListItem } from '../types/conversation';
 
 type Props = {
   onLogout: () => void;
 };
 
-const chats = [
-  {
-    id: '1',
-    name: 'Project Notes',
-    preview: 'Local summaries and smart reply testing will live here.',
-    time: 'Now',
-  },
-  {
-    id: '2',
-    name: 'Family',
-    preview: 'Placeholder chat thread for the next messaging step.',
-    time: '10:24',
-  },
-  {
-    id: '3',
-    name: 'Work',
-    preview: 'RAG-backed search can surface older decisions here later.',
-    time: 'Yesterday',
-  },
-];
-
+/**
+ * Displays locally stored conversations and exposes a temporary logout action.
+ */
 export default function ChatListScreen({ onLogout }: Props) {
+  const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadConversations() {
+      try {
+        await seedStarterConversations();
+        const rows = await listConversations();
+
+        if (isMounted) {
+          setConversations(rows);
+          setError('');
+        }
+      } catch {
+        if (isMounted) {
+          setError('Could not load conversations.');
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadConversations();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -58,36 +84,74 @@ export default function ChatListScreen({ onLogout }: Props) {
 
       <FlatList
         contentContainerStyle={styles.listContent}
-        data={chats}
-        keyExtractor={(item) => item.id}
+        data={conversations}
+        keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
           <Pressable style={({ pressed }) => [styles.chatRow, pressed && styles.chatRowPressed]}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text>
+              <Text style={styles.avatarText}>
+                {(item.title ?? 'C').slice(0, 1)}
+              </Text>
             </View>
             <View style={styles.chatBody}>
               <View style={styles.chatMeta}>
-                <Text style={styles.chatName}>{item.name}</Text>
-                <Text style={styles.chatTime}>{item.time}</Text>
+                <Text style={styles.chatName}>
+                  {item.title ?? 'Untitled conversation'}
+                </Text>
+                <Text style={styles.chatTime}>
+                  {formatConversationTime(item.lastMessageAt ?? item.updatedAt)}
+                </Text>
               </View>
               <Text numberOfLines={1} style={styles.chatPreview}>
-                {item.preview}
+                {item.lastMessage ?? 'No messages yet'}
               </Text>
             </View>
           </Pressable>
         )}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            {isLoading ? (
+              <ActivityIndicator color="#25D366" />
+            ) : (
+              <>
+                <Text style={styles.emptyTitle}>
+                  {error || 'No conversations yet'}
+                </Text>
+                <Text style={styles.emptyText}>
+                  New chats will appear here after they are created.
+                </Text>
+              </>
+            )}
+          </View>
+        }
         ListFooterComponent={
           <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>Chat list placeholder ready</Text>
+            <Text style={styles.emptyTitle}>SQLite conversations ready</Text>
             <Text style={styles.emptyText}>
-              Authentication now lands here. The real conversation list can
-              replace these rows when message storage is added.
+              This list is now loaded from local conversation and message
+              tables.
             </Text>
           </View>
         }
       />
     </SafeAreaView>
   );
+}
+
+/**
+ * Formats SQLite timestamp strings for compact chat-list metadata.
+ */
+function formatConversationTime(value: string) {
+  const date = new Date(value.replace(' ', 'T'));
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 const styles = StyleSheet.create({
