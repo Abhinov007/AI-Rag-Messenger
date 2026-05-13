@@ -7,6 +7,7 @@
 import { getDatabase } from './database';
 import type {
   Conversation,
+  ConversationCreateInput,
   ConversationListItem,
 } from '../types/conversation';
 
@@ -23,7 +24,11 @@ type ConversationRow = {
 /**
  * Raw row shape returned by the chat-list query.
  */
-type ConversationListRow = ConversationRow & {
+type ConversationListRow = {
+  id: number;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
   last_message: string | null;
   last_message_at: string | null;
   message_count: number;
@@ -58,21 +63,23 @@ function mapConversationListItem(
 /**
  * Creates a new conversation and returns its database id.
  */
-export async function createConversation(title?: string) {
+export async function createConversation(
+  conversation: ConversationCreateInput,
+): Promise<number> {
   const db = await getDatabase();
   const result = await db.runAsync(
     'INSERT INTO conversations (title) VALUES (?);',
-    title?.trim() || null,
+    conversation.title?.trim() || null,
   );
 
-  return result.lastInsertRowId;
+  return Number(result.lastInsertRowId);
 }
 
 /**
  * Returns conversations ordered by most recently updated first, including each
  * row's latest message preview and message count.
  */
-export async function listConversations(): Promise<ConversationListItem[]> {
+export async function getConversations(): Promise<ConversationListItem[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<ConversationListRow>(`
     SELECT
@@ -80,7 +87,7 @@ export async function listConversations(): Promise<ConversationListItem[]> {
       conversations.title,
       conversations.created_at,
       conversations.updated_at,
-      latest_message.body AS last_message,
+      COALESCE(conversations.last_message, latest_message.body) AS last_message,
       latest_message.created_at AS last_message_at,
       COUNT(messages.id) AS message_count
     FROM conversations
@@ -101,19 +108,51 @@ export async function listConversations(): Promise<ConversationListItem[]> {
   return rows.map(mapConversationListItem);
 }
 
+/** @deprecated Prefer `getConversations`. */
+export async function listConversations(): Promise<ConversationListItem[]> {
+  return getConversations();
+}
+
 /**
  * Looks up one conversation by id.
  */
-export async function getConversation(
-  conversationId: number,
+export async function getConversationById(
+  id: number,
 ): Promise<Conversation | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<ConversationRow>(
     'SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?;',
-    conversationId,
+    id,
   );
 
   return row ? mapConversation(row) : null;
+}
+
+/** @deprecated Prefer `getConversationById`. */
+export async function getConversation(
+  conversationId: number,
+): Promise<Conversation | null> {
+  return getConversationById(conversationId);
+}
+
+/**
+ * Updates the denormalized last-message preview and bumps `updated_at` so the
+ * chat list reflects recent activity even before a new `messages` row exists.
+ */
+export async function updateConversationLastMessage(
+  conversationId: number,
+  lastMessage: string,
+) {
+  const db = await getDatabase();
+  await db.runAsync(
+    `
+    UPDATE conversations
+    SET last_message = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?;
+    `,
+    lastMessage.trim(),
+    conversationId,
+  );
 }
 
 /**

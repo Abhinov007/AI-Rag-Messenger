@@ -12,10 +12,10 @@ import {
   StatusBar,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import ConversationItem from '../components/ConversationItem';
 import { listConversations } from '../db/conversationRepository';
 import type { ConversationListItem } from '../types/conversation';
 
@@ -36,10 +36,10 @@ export default function ChatListScreen({ onLogout }: Props) {
 
     async function loadConversations() {
       try {
-        const rows = await listConversations();
+        const conversations = await listConversations();
 
         if (isMounted) {
-          setConversations(rows);
+          setConversations(conversations);
           setError('');
         }
       } catch {
@@ -86,26 +86,7 @@ export default function ChatListScreen({ onLogout }: Props) {
         data={conversations}
         keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
-          <TouchableOpacity activeOpacity={0.76} style={styles.chatRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {(item.title ?? 'C').slice(0, 1)}
-              </Text>
-            </View>
-            <View style={styles.chatBody}>
-              <View style={styles.chatMeta}>
-                <Text style={styles.chatName}>
-                  {item.title ?? 'Untitled conversation'}
-                </Text>
-                <Text style={styles.chatTime}>
-                  {formatConversationTime(item.lastMessageAt ?? item.updatedAt)}
-                </Text>
-              </View>
-              <Text numberOfLines={1} style={styles.chatPreview}>
-                {item.lastMessage ?? 'No messages yet'}
-              </Text>
-            </View>
-          </TouchableOpacity>
+          <ConversationItem conversation={item} />
         )}
         ListEmptyComponent={
           <View style={styles.emptyState}>
@@ -126,22 +107,6 @@ export default function ChatListScreen({ onLogout }: Props) {
       />
     </SafeAreaView>
   );
-}
-
-/**
- * Formats SQLite timestamp strings for compact chat-list metadata.
- */
-function formatConversationTime(value: string) {
-  const date = new Date(value.replace(' ', 'T'));
-
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
 }
 
 const styles = StyleSheet.create({
@@ -188,55 +153,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 28,
-  },
-  chatRow: {
-    alignItems: 'center',
-    backgroundColor: '#102820',
-    borderColor: '#1D3B31',
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 14,
-    marginBottom: 12,
-    padding: 14,
-  },
-  avatar: {
-    alignItems: 'center',
-    backgroundColor: '#25D366',
-    borderRadius: 23,
-    height: 46,
-    justifyContent: 'center',
-    width: 46,
-  },
-  avatarText: {
-    color: '#071A14',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  chatBody: {
-    flex: 1,
-    gap: 6,
-  },
-  chatMeta: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  chatName: {
-    color: '#FFFFFF',
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  chatTime: {
-    color: '#8AA398',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  chatPreview: {
-    color: '#B7C8C0',
-    fontSize: 14,
   },
   emptyState: {
     borderColor: '#1D3B31',

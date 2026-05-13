@@ -1,0 +1,225 @@
+## Day 4 Todo List — Chat List UI
+
+
+### Create reusable component
+
+* [ ] Create file:
+
+```text
+src/components/ConversationItem.tsx
+```
+
+* [ ] Add props:
+
+```ts
+title
+lastMessage
+lastMessageAt
+unreadCount
+onPress
+```
+
+* [ ] Show avatar circle.
+* [ ] Show conversation name.
+* [ ] Show last message.
+* [ ] Show last message time.
+* [ ] Add optional unread count badge.
+* [ ] Make the full row clickable.
+
+---
+
+### Create date utility
+
+* [ ] Create file:
+
+```text
+src/utils/date.ts
+```
+
+* [ ] Add `formatChatTime()` helper.
+* [ ] Use it to show message time like:
+
+```text
+10:45 AM
+```
+
+---
+
+### Update ChatList screen
+
+* [ ] Open:
+
+```text
+src/screens/ChatListScreen.tsx
+```
+
+* [ ] Add header with app name.
+* [ ] Add logout button.
+* [ ] Add search input.
+* [ ] Add “Chats” section title.
+* [ ] Fetch conversations from SQLite.
+* [ ] Store conversations in state.
+* [ ] Display conversations using `FlatList`.
+
+---
+
+### Use FlatList
+
+* [ ] Replace manual list rendering with `FlatList`.
+* [ ] Add `data={filteredConversations}`.
+* [ ] Add `keyExtractor={(item) => item.id}`.
+* [ ] Render each item using `ConversationItem`.
+
+---
+
+### Add search functionality
+
+* [ ] Add `searchQuery` state.
+* [ ] Filter conversations by title.
+* [ ] Filter conversations by last message.
+* [ ] Test search with:
+
+```text
+rahul
+deployment
+frontend
+meeting
+```
+
+---
+
+### Add loading state
+
+* [ ] Add `loading` state.
+* [ ] Show loading text/spinner while conversations are being fetched.
+* [ ] Hide loading after data loads.
+
+---
+
+### Add empty states
+
+* [ ] Show this if there are no conversations:
+
+```text
+No chats yet
+Your conversations will appear here.
+```
+
+* [ ] Show this if search has no result:
+
+```text
+No matching chats found
+```
+
+---
+
+### Add pull-to-refresh
+
+* [ ] Add `refreshing` state.
+* [ ] Add `onRefresh` function.
+* [ ] Connect it to `FlatList`.
+* [ ] Test pull-to-refresh reloads conversations.
+
+---
+
+### Create ChatScreen placeholder
+
+* [ ] Create file:
+
+```text
+src/screens/ChatScreen.tsx
+```
+
+* [ ] Show placeholder text:
+
+```text
+Chat screen coming next
+```
+
+* [ ] Show selected conversation title.
+* [ ] Show selected conversation ID.
+
+---
+
+### Update navigation
+
+* [ ] Open:
+
+```text
+src/types/navigation.ts
+```
+
+* [ ] Update `AppStackParamList`:
+
+```ts
+export type AppStackParamList = {
+  ChatList: undefined;
+  Chat: {
+    conversationId: string;
+    title: string;
+  };
+};
+```
+
+* [ ] Open:
+
+```text
+src/navigation/AppNavigator.tsx
+```
+
+* [ ] Add `ChatScreen` to stack.
+* [ ] Make conversation tap navigate to `Chat`.
+
+---
+
+### UI polish
+
+* [ ] Use dark background:
+
+```text
+#071A14
+```
+
+* [ ] Use card color:
+
+```text
+#102820
+```
+
+* [ ] Use green accent:
+
+```text
+#25D366
+```
+
+* [ ] Use white main text.
+* [ ] Use muted secondary text.
+* [ ] Add rounded search bar.
+* [ ] Add spacing between chat rows.
+* [ ] Make avatar circles clean.
+* [ ] Make the list look WhatsApp-like.
+
+---
+
+## Final Day 4 Completion Checklist
+
+* [ ] `ConversationItem.tsx` created.
+* [ ] `date.ts` created.
+* [ ] `ChatListScreen.tsx` updated.
+* [ ] SQLite conversations appear in ChatList.
+* [ ] `FlatList` is used.
+* [ ] Search works.
+* [ ] Loading state works.
+* [ ] Empty state works.
+* [ ] Pull-to-refresh works.
+* [ ] `ChatScreen.tsx` placeholder created.
+* [ ] Conversation tap opens ChatScreen.
+* [ ] No red screen errors.
+* [ ] Code committed.
+
+Commit command:
+
+```powershell
+git add .
+git commit -m "day-04-chat-list-ui"
+```
