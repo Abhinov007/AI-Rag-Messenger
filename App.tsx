@@ -1,5 +1,6 @@
 import './global.css';
 import React, { useEffect, useState } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -7,6 +8,8 @@ import { ActivityIndicator, View } from 'react-native';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
+import ChatScreen from './src/screens/ChatScreen';
+import type { AppStackParamList } from './src/navigation/types';
 import { initializeDatabase } from './src/db/database';
 import {
   getCurrentUser,
@@ -20,9 +23,7 @@ export type AuthStackParamList = {
   Signup: undefined;
 };
 
-export type AppStackParamList = {
-  ChatList: undefined;
-};
+export type { AppStackParamList } from './src/navigation/types';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -59,20 +60,20 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <NavigationContainer>
-      {isAuthenticated ? (
-        <AppStack.Navigator screenOptions={{ headerShown: false }}>
-          <AppStack.Screen name="ChatList">
-            {(props) => (
-              <ChatListScreen
-                {...props}
-                onLogout={handleLogout}
-              />
-            )}
-          </AppStack.Screen>
-        </AppStack.Navigator>
-      ) : (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <NavigationContainer>
+        {isAuthenticated ? (
+          <AppStack.Navigator
+            initialRouteName="ChatList"
+            screenOptions={{ headerShown: false }}
+          >
+            <AppStack.Screen name="ChatList">
+              {() => <ChatListScreen onLogout={handleLogout} />}
+            </AppStack.Screen>
+            <AppStack.Screen name="Chat" component={ChatScreen} />
+          </AppStack.Navigator>
+        ) : (
         <AuthStack.Navigator screenOptions={{ headerShown: false }}>
           <AuthStack.Screen name="Login">
             {(props) => (
@@ -105,8 +106,9 @@ export default function App() {
             )}
           </AuthStack.Screen>
         </AuthStack.Navigator>
-      )}
-      </NavigationContainer>
-    </SafeAreaProvider>
+        )}
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

@@ -7,6 +7,7 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { ConversationListItem } from '../types/conversation';
+import { formatLastMessageTime } from '../utils/date';
 
 type Props = {
   conversation: ConversationListItem;
@@ -21,13 +22,16 @@ export default function ConversationItem({
 }: Props) {
   const title = conversation.title ?? 'Untitled conversation';
   const lastMessage = conversation.lastMessage ?? 'No messages yet';
-  const time = formatConversationTime(
+  const time = formatLastMessageTime(
     conversation.lastMessageAt ?? conversation.updatedAt,
   );
 
   return (
     <TouchableOpacity
+      accessibilityLabel={`Open ${title} conversation`}
+      accessibilityRole="button"
       activeOpacity={0.76}
+      hitSlop={4}
       onPress={onPress}
       style={styles.container}
     >
@@ -56,19 +60,6 @@ export default function ConversationItem({
       </View>
     </TouchableOpacity>
   );
-}
-
-function formatConversationTime(value: string) {
-  const date = new Date(value.replace(' ', 'T'));
-
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
 }
 
 const styles = StyleSheet.create({

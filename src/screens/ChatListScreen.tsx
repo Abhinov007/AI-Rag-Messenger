@@ -4,19 +4,24 @@
  * After authentication, this screen renders the conversation list from local
  * SQLite storage initialized by the app root.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   Pressable,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ConversationItem from '../components/ConversationItem';
 import { listConversations } from '../db/conversationRepository';
+import type { AppStackParamList } from '../navigation/types';
 import type { ConversationListItem } from '../types/conversation';
 
 type Props = {
@@ -27,38 +32,73 @@ type Props = {
  * Displays locally stored conversations and exposes a temporary logout action.
  */
 export default function ChatListScreen({ onLogout }: Props) {
+  const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadConversations() {
-      try {
-        const conversations = await listConversations();
-
-        if (isMounted) {
-          setConversations(conversations);
-          setError('');
-        }
-      } catch {
-        if (isMounted) {
-          setError('Could not load conversations.');
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const filteredConversations = conversations.filter((conversation) => {
+    if (!normalizedSearchQuery) {
+      return true;
     }
 
-    loadConversations();
+    const title = conversation.title?.toLowerCase() ?? '';
+    const lastMessage = conversation.lastMessage?.toLowerCase() ?? '';
 
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    return (
+      title.includes(normalizedSearchQuery) ||
+      lastMessage.includes(normalizedSearchQuery)
+    );
+  });
+
+  const isFirstListFocus = useRef(true);
+
+  const handleOpenConversation = useCallback(
+    (conversation: ConversationListItem) => {
+      Keyboard.dismiss();
+      navigation.navigate('Chat', {
+        conversationId: conversation.id,
+        title: conversation.title,
+      });
+    },
+    [navigation],
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let isMounted = true;
+
+      async function loadConversations() {
+        if (isFirstListFocus.current) {
+          setIsLoading(true);
+        }
+        try {
+          const rows = await listConversations();
+
+          if (isMounted) {
+            setConversations(rows);
+            setError('');
+          }
+        } catch {
+          if (isMounted) {
+            setError('Could not load conversations.');
+          }
+        } finally {
+          if (isMounted) {
+            setIsLoading(false);
+            isFirstListFocus.current = false;
+          }
+        }
+      }
+
+      loadConversations();
+
+      return () => {
+        isMounted = false;
+      };
+    }, []),
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -81,12 +121,27 @@ export default function ChatListScreen({ onLogout }: Props) {
         </Pressable>
       </View>
 
+      <View style={styles.searchWrap}>
+        <TextInput
+          autoCapitalize="none"
+          onChangeText={setSearchQuery}
+          placeholder="Search chats"
+          placeholderTextColor="#789185"
+          style={styles.searchInput}
+          value={searchQuery}
+        />
+      </View>
+
       <FlatList
         contentContainerStyle={styles.listContent}
-        data={conversations}
+        data={filteredConversations}
+        keyboardShouldPersistTaps="handled"
         keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
-          <ConversationItem conversation={item} />
+          <ConversationItem
+            conversation={item}
+            onPress={() => handleOpenConversation(item)}
+          />
         )}
         ListEmptyComponent={
           <View style={styles.emptyState}>
@@ -95,10 +150,15 @@ export default function ChatListScreen({ onLogout }: Props) {
             ) : (
               <>
                 <Text style={styles.emptyTitle}>
-                  {error || 'No conversations yet'}
+                  {error ||
+                    (normalizedSearchQuery
+                      ? 'No matching conversations'
+                      : 'No conversations yet')}
                 </Text>
                 <Text style={styles.emptyText}>
-                  New chats will appear here after they are created.
+                  {normalizedSearchQuery
+                    ? 'Try searching by conversation name or last message.'
+                    : 'New chats will appear here after they are created.'}
                 </Text>
               </>
             )}
@@ -148,6 +208,20 @@ const styles = StyleSheet.create({
     color: '#D9FFF0',
     fontSize: 14,
     fontWeight: '800',
+  },
+  searchWrap: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  searchInput: {
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#FFFFFF',
+    fontSize: 15,
+    minHeight: 48,
+    paddingHorizontal: 14,
   },
   listContent: {
     paddingHorizontal: 16,
