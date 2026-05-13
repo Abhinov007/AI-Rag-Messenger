@@ -13,12 +13,17 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 export async function seedDummyConversations(db: SQLiteDatabase) {
   const existingSeed = await db.getFirstAsync<{ seed_key: string }>(
     'SELECT seed_key FROM seed_history WHERE seed_key = ?;',
-    'dummy_conversations_v1',
+    'dummy_conversations_v2',
   );
 
   if (existingSeed) {
     return;
   }
+
+  await db.runAsync(`
+    DELETE FROM conversations
+    WHERE title IN ('Project Notes', 'Family', 'Work', 'Rahul', 'Aman', 'Priya');
+  `);
 
   const rahulId = await createSeedConversation(db, 'Rahul');
   await createSeedMessage(
@@ -76,7 +81,7 @@ export async function seedDummyConversations(db: SQLiteDatabase) {
 
   await db.runAsync(
     'INSERT INTO seed_history (seed_key) VALUES (?);',
-    'dummy_conversations_v1',
+    'dummy_conversations_v2',
   );
 }
 

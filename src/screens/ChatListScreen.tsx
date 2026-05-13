@@ -9,12 +9,13 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { listConversations } from '../db/conversationRepository';
 import type { ConversationListItem } from '../types/conversation';
 
@@ -85,7 +86,7 @@ export default function ChatListScreen({ onLogout }: Props) {
         data={conversations}
         keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
-          <Pressable style={({ pressed }) => [styles.chatRow, pressed && styles.chatRowPressed]}>
+          <TouchableOpacity activeOpacity={0.76} style={styles.chatRow}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>
                 {(item.title ?? 'C').slice(0, 1)}
@@ -104,7 +105,7 @@ export default function ChatListScreen({ onLogout }: Props) {
                 {item.lastMessage ?? 'No messages yet'}
               </Text>
             </View>
-          </Pressable>
+          </TouchableOpacity>
         )}
         ListEmptyComponent={
           <View style={styles.emptyState}>
@@ -120,15 +121,6 @@ export default function ChatListScreen({ onLogout }: Props) {
                 </Text>
               </>
             )}
-          </View>
-        }
-        ListFooterComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>SQLite conversations ready</Text>
-            <Text style={styles.emptyText}>
-              This list is now loaded from local conversation and message
-              tables.
-            </Text>
           </View>
         }
       />
@@ -162,8 +154,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 14,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   kicker: {
     color: '#25D366',
@@ -173,7 +165,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: '#FFFFFF',
-    fontSize: 32,
+    fontSize: 34,
     fontWeight: '900',
     marginTop: 4,
   },
@@ -193,7 +185,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   listContent: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 8,
     paddingBottom: 28,
   },
   chatRow: {
@@ -206,9 +199,6 @@ const styles = StyleSheet.create({
     gap: 14,
     marginBottom: 12,
     padding: 14,
-  },
-  chatRowPressed: {
-    opacity: 0.76,
   },
   avatar: {
     alignItems: 'center',

@@ -1,7 +1,9 @@
+import './global.css';
 import React, { useEffect, useState } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
@@ -50,14 +52,15 @@ export default function App() {
 
   if (isInitializingApp) {
     return (
-      <View style={styles.loadingContainer}>
+      <View className="flex-1 items-center justify-center bg-[#071A14]">
         <ActivityIndicator color="#25D366" size="large" />
       </View>
     );
   }
 
   return (
-    <NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer>
       {isAuthenticated ? (
         <AppStack.Navigator screenOptions={{ headerShown: false }}>
           <AppStack.Screen name="ChatList">
@@ -103,15 +106,7 @@ export default function App() {
           </AuthStack.Screen>
         </AuthStack.Navigator>
       )}
-    </NavigationContainer>
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    alignItems: 'center',
-    backgroundColor: '#071A14',
-    flex: 1,
-    justifyContent: 'center',
-  },
-});

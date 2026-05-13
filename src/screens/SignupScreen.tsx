@@ -3,13 +3,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../App';
 
@@ -64,77 +66,84 @@ export default function SignupScreen({ navigation, onSignup }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardView}
       >
-        <View style={styles.content}>
-          <Text style={styles.kicker}>AI RAG Chat</Text>
-          <Text style={styles.title}>Create account</Text>
-          <Text style={styles.subtitle}>
-            Start with a lightweight local account flow. Real auth can plug in
-            here later.
-          </Text>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View>
+            <Text style={styles.kicker}>AI RAG Chat</Text>
+            <Text style={styles.title}>Create account</Text>
+            <Text style={styles.subtitle}>
+              Start with a lightweight local account flow. Real auth can plug in
+              here later.
+            </Text>
 
-          <View style={styles.form}>
-            <TextInput
-              onChangeText={setName}
-              placeholder="Name"
-              placeholderTextColor="#789185"
-              style={styles.input}
-              value={name}
-            />
-            <TextInput
-              autoCapitalize="none"
-              keyboardType="email-address"
-              onChangeText={setEmail}
-              placeholder="Email"
-              placeholderTextColor="#789185"
-              style={styles.input}
-              value={email}
-            />
-            <TextInput
-              onChangeText={setPassword}
-              placeholder="Password"
-              placeholderTextColor="#789185"
-              secureTextEntry
-              style={styles.input}
-              value={password}
-            />
-            <TextInput
-              onChangeText={setConfirmPassword}
-              placeholder="Confirm password"
-              placeholderTextColor="#789185"
-              secureTextEntry
-              style={styles.input}
-              value={confirmPassword}
-            />
+            <View style={styles.form}>
+              <TextInput
+                onChangeText={setName}
+                placeholder="Name"
+                placeholderTextColor="#789185"
+                style={styles.input}
+                value={name}
+              />
+              <TextInput
+                autoCapitalize="none"
+                keyboardType="email-address"
+                onChangeText={setEmail}
+                placeholder="Email"
+                placeholderTextColor="#789185"
+                style={styles.input}
+                value={email}
+              />
+              <TextInput
+                onChangeText={setPassword}
+                placeholder="Password"
+                placeholderTextColor="#789185"
+                secureTextEntry
+                style={styles.input}
+                value={password}
+              />
+              <TextInput
+                onChangeText={setConfirmPassword}
+                placeholder="Confirm password"
+                placeholderTextColor="#789185"
+                secureTextEntry
+                style={styles.input}
+                value={confirmPassword}
+              />
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+
+              <TouchableOpacity
+                activeOpacity={0.76}
+                disabled={isSubmitting}
+                onPress={handleSignup}
+                style={[
+                  styles.primaryButton,
+                  isSubmitting && styles.buttonPressed,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {isSubmitting ? 'Creating account...' : 'Sign up'}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
             <Pressable
-              disabled={isSubmitting}
-              onPress={handleSignup}
+              onPress={() => navigation.navigate('Login')}
               style={({ pressed }) => [
-                styles.primaryButton,
-                (pressed || isSubmitting) && styles.buttonPressed,
+                styles.switchButton,
+                pressed && styles.switchButtonPressed,
               ]}
             >
-              <Text style={styles.primaryButtonText}>
-                {isSubmitting ? 'Creating account...' : 'Sign up'}
+              <Text style={styles.switchText}>
+                Already have an account?{' '}
+                <Text style={styles.switchAction}>Log in</Text>
               </Text>
             </Pressable>
           </View>
-
-          <Pressable
-            onPress={() => navigation.navigate('Login')}
-            style={({ pressed }) => [
-              styles.switchButton,
-              pressed && styles.switchButtonPressed,
-            ]}
-          >
-            <Text style={styles.switchText}>
-              Already have an account?{' '}
-              <Text style={styles.switchAction}>Log in</Text>
-            </Text>
-          </Pressable>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -148,10 +157,11 @@ const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
   },
-  content: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
   },
   kicker: {
     color: '#25D366',

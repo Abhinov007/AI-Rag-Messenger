@@ -3,13 +3,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../App';
 
@@ -51,66 +53,73 @@ export default function LoginScreen({ navigation, onLogin }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardView}
       >
-        <View style={styles.content}>
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>AI</Text>
-          </View>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View>
+            <View style={styles.logoCircle}>
+              <Text style={styles.logoText}>AI</Text>
+            </View>
 
-          <Text style={styles.title}>Welcome back</Text>
-          <Text style={styles.subtitle}>
-            Sign in to continue your AI-powered messaging workspace.
-          </Text>
-          <Text style={styles.helperText}>
-            Demo: demo@airag.app / password123
-          </Text>
+            <Text style={styles.title}>Welcome back</Text>
+            <Text style={styles.subtitle}>
+              Sign in to continue your AI-powered messaging workspace.
+            </Text>
+            <Text style={styles.helperText}>
+              Demo: demo@airag.app / password123
+            </Text>
 
-          <View style={styles.form}>
-            <TextInput
-              autoCapitalize="none"
-              keyboardType="email-address"
-              onChangeText={setEmail}
-              placeholder="Email"
-              placeholderTextColor="#789185"
-              style={styles.input}
-              value={email}
-            />
-            <TextInput
-              onChangeText={setPassword}
-              placeholder="Password"
-              placeholderTextColor="#789185"
-              secureTextEntry
-              style={styles.input}
-              value={password}
-            />
+            <View style={styles.form}>
+              <TextInput
+                autoCapitalize="none"
+                keyboardType="email-address"
+                onChangeText={setEmail}
+                placeholder="Email"
+                placeholderTextColor="#789185"
+                style={styles.input}
+                value={email}
+              />
+              <TextInput
+                onChangeText={setPassword}
+                placeholder="Password"
+                placeholderTextColor="#789185"
+                secureTextEntry
+                style={styles.input}
+                value={password}
+              />
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+
+              <TouchableOpacity
+                activeOpacity={0.76}
+                disabled={isSubmitting}
+                onPress={handleLogin}
+                style={[
+                  styles.primaryButton,
+                  isSubmitting && styles.buttonPressed,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {isSubmitting ? 'Signing in...' : 'Log in'}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
             <Pressable
-              disabled={isSubmitting}
-              onPress={handleLogin}
+              onPress={() => navigation.navigate('Signup')}
               style={({ pressed }) => [
-                styles.primaryButton,
-                (pressed || isSubmitting) && styles.buttonPressed,
+                styles.switchButton,
+                pressed && styles.switchButtonPressed,
               ]}
             >
-              <Text style={styles.primaryButtonText}>
-                {isSubmitting ? 'Signing in...' : 'Log in'}
+              <Text style={styles.switchText}>
+                New here? <Text style={styles.switchAction}>Create account</Text>
               </Text>
             </Pressable>
           </View>
-
-          <Pressable
-            onPress={() => navigation.navigate('Signup')}
-            style={({ pressed }) => [
-              styles.switchButton,
-              pressed && styles.switchButtonPressed,
-            ]}
-          >
-            <Text style={styles.switchText}>
-              New here? <Text style={styles.switchAction}>Create account</Text>
-            </Text>
-          </Pressable>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -124,10 +133,11 @@ const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
   },
-  content: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
   },
   logoCircle: {
     width: 72,
