@@ -21,6 +21,7 @@ import { getConversationById } from '../db/conversationRepository';
 import { addMessage, getMessagesByConversationId } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
 import type { Message } from '../types/message';
+import { formatMessageTime } from '../utils/date';
 
 type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
 type ChatRoute = RouteProp<AppStackParamList, 'Chat'>;
@@ -100,7 +101,7 @@ export default function ChatScreen({ navigation, route }: Props) {
           onPress={() => navigation.goBack()}
           style={styles.backBtn}
         >
-          <Text style={styles.backLabel}>‹ Back</Text>
+          <Text style={styles.backLabel}>{'< Back'}</Text>
         </TouchableOpacity>
         <Text numberOfLines={1} style={styles.headerTitle}>
           {title}
@@ -147,6 +148,9 @@ export default function ChatScreen({ navigation, route }: Props) {
                         : 'System'}
                   </Text>
                   <Text style={styles.bubbleBody}>{item.body}</Text>
+                  <Text style={styles.messageTime}>
+                    {formatMessageTime(item.createdAt)}
+                  </Text>
                 </View>
               </View>
             )}
@@ -175,7 +179,7 @@ export default function ChatScreen({ navigation, route }: Props) {
               (isSending || !draft.trim() || error) && styles.sendBtnDisabled,
             ]}
           >
-            <Text style={styles.sendLabel}>{isSending ? '…' : 'Send'}</Text>
+            <Text style={styles.sendLabel}>{isSending ? '...' : 'Send'}</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -273,6 +277,13 @@ const styles = StyleSheet.create({
     color: '#E8F5EF',
     fontSize: 15,
     lineHeight: 21,
+  },
+  messageTime: {
+    alignSelf: 'flex-end',
+    color: '#8AA398',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 6,
   },
   emptyThread: {
     color: '#8AA398',
