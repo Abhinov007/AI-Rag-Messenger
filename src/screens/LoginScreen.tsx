@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useSignIn } from '@clerk/expo/legacy';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -15,20 +16,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../App';
 
-type Props = NativeStackScreenProps<AuthStackParamList, 'Login'> & {
-  onLogin: (
-    email: string,
-    password: string,
-  ) => Promise<{ ok: true } | { ok: false; error: string }>;
-};
+type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
 
-export default function LoginScreen({ navigation, onLogin }: Props) {
+export default function LoginScreen({ navigation }: Props) {
+  const { isLoaded, signIn, setActive } = useSignIn();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleLogin() {
+    if (!isLoaded) {
+      return;
+    }
+
     if (!email.trim() || !password.trim()) {
       setError('Enter your email and password to continue.');
       return;
@@ -37,10 +38,18 @@ export default function LoginScreen({ navigation, onLogin }: Props) {
     setError('');
     setIsSubmitting(true);
     try {
-      const result = await onLogin(email, password);
-      if (!result.ok) {
-        setError(result.error);
+      const result = await signIn.create({
+        identifier: email.trim(),
+        password,
+      });
+
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId });
+      } else {
+        setError('Additional verification is required for this account.');
       }
+    } catch (err) {
+      setError(getClerkErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -66,9 +75,6 @@ export default function LoginScreen({ navigation, onLogin }: Props) {
             <Text style={styles.title}>Welcome back</Text>
             <Text style={styles.subtitle}>
               Sign in to continue your AI-powered messaging workspace.
-            </Text>
-            <Text style={styles.helperText}>
-              Demo: demo@airag.app / password123
             </Text>
 
             <View style={styles.form}>
@@ -125,6 +131,20 @@ export default function LoginScreen({ navigation, onLogin }: Props) {
   );
 }
 
+function getClerkErrorMessage(err: unknown) {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'errors' in err &&
+    Array.isArray((err as { errors?: unknown }).errors)
+  ) {
+    const [firstError] = (err as { errors: Array<{ message?: string }> }).errors;
+    return firstError?.message ?? 'Unable to sign in.';
+  }
+
+  return 'Unable to sign in.';
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -164,12 +184,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
     marginBottom: 12,
-  },
-  helperText: {
-    color: '#D9FFF0',
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 24,
   },
   form: {
     gap: 14,

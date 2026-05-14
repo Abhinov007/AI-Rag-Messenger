@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useSignUp } from '@clerk/expo/legacy';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -15,23 +16,24 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../App';
 
-type Props = NativeStackScreenProps<AuthStackParamList, 'Signup'> & {
-  onSignup: (
-    name: string,
-    email: string,
-    password: string,
-  ) => Promise<{ ok: true } | { ok: false; error: string }>;
-};
+type Props = NativeStackScreenProps<AuthStackParamList, 'Signup'>;
 
-export default function SignupScreen({ navigation, onSignup }: Props) {
+export default function SignupScreen({ navigation }: Props) {
+  const { isLoaded, signUp, setActive } = useSignUp();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleSignup() {
+    if (!isLoaded) {
+      return;
+    }
+
     if (
       !name.trim() ||
       !email.trim() ||
@@ -50,10 +52,40 @@ export default function SignupScreen({ navigation, onSignup }: Props) {
     setError('');
     setIsSubmitting(true);
     try {
-      const result = await onSignup(name, email, password);
-      if (!result.ok) {
-        setError(result.error);
+      await signUp.create({
+        firstName: name.trim(),
+        emailAddress: email.trim(),
+        password,
+      });
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+      setIsVerifying(true);
+    } catch (err) {
+      setError(getClerkErrorMessage(err));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleVerify() {
+    if (!isLoaded || !code.trim()) {
+      setError('Enter the verification code from your email.');
+      return;
+    }
+
+    setError('');
+    setIsSubmitting(true);
+    try {
+      const result = await signUp.attemptEmailAddressVerification({
+        code: code.trim(),
+      });
+
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId });
+      } else {
+        setError('Additional verification is required.');
       }
+    } catch (err) {
+      setError(getClerkErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -73,59 +105,81 @@ export default function SignupScreen({ navigation, onSignup }: Props) {
         >
           <View>
             <Text style={styles.kicker}>AI RAG Chat</Text>
-            <Text style={styles.title}>Create account</Text>
+            <Text style={styles.title}>
+              {isVerifying ? 'Verify email' : 'Create account'}
+            </Text>
             <Text style={styles.subtitle}>
-              Start with a lightweight local account flow. Real auth can plug in
-              here later.
+              {isVerifying
+                ? 'Enter the code Clerk sent to your email address.'
+                : 'Create your account with Clerk authentication.'}
             </Text>
 
             <View style={styles.form}>
-              <TextInput
-                onChangeText={setName}
-                placeholder="Name"
-                placeholderTextColor="#789185"
-                style={styles.input}
-                value={name}
-              />
-              <TextInput
-                autoCapitalize="none"
-                keyboardType="email-address"
-                onChangeText={setEmail}
-                placeholder="Email"
-                placeholderTextColor="#789185"
-                style={styles.input}
-                value={email}
-              />
-              <TextInput
-                onChangeText={setPassword}
-                placeholder="Password"
-                placeholderTextColor="#789185"
-                secureTextEntry
-                style={styles.input}
-                value={password}
-              />
-              <TextInput
-                onChangeText={setConfirmPassword}
-                placeholder="Confirm password"
-                placeholderTextColor="#789185"
-                secureTextEntry
-                style={styles.input}
-                value={confirmPassword}
-              />
+              {isVerifying ? (
+                <TextInput
+                  keyboardType="number-pad"
+                  onChangeText={setCode}
+                  placeholder="Verification code"
+                  placeholderTextColor="#789185"
+                  style={styles.input}
+                  value={code}
+                />
+              ) : (
+                <>
+                  <TextInput
+                    onChangeText={setName}
+                    placeholder="Name"
+                    placeholderTextColor="#789185"
+                    style={styles.input}
+                    value={name}
+                  />
+                  <TextInput
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    onChangeText={setEmail}
+                    placeholder="Email"
+                    placeholderTextColor="#789185"
+                    style={styles.input}
+                    value={email}
+                  />
+                  <TextInput
+                    onChangeText={setPassword}
+                    placeholder="Password"
+                    placeholderTextColor="#789185"
+                    secureTextEntry
+                    style={styles.input}
+                    value={password}
+                  />
+                  <TextInput
+                    onChangeText={setConfirmPassword}
+                    placeholder="Confirm password"
+                    placeholderTextColor="#789185"
+                    secureTextEntry
+                    style={styles.input}
+                    value={confirmPassword}
+                  />
+                </>
+              )}
 
               {error ? <Text style={styles.error}>{error}</Text> : null}
 
               <TouchableOpacity
                 activeOpacity={0.76}
                 disabled={isSubmitting}
-                onPress={handleSignup}
+                onPress={isVerifying ? handleVerify : handleSignup}
                 style={[
                   styles.primaryButton,
                   isSubmitting && styles.buttonPressed,
                 ]}
               >
                 <Text style={styles.primaryButtonText}>
-                  {isSubmitting ? 'Creating account...' : 'Sign up'}
+                  {isSubmitting
+                    ? isVerifying
+                      ? 'Verifying...'
+                      : 'Creating account...'
+                    : isVerifying
+                      ? 'Verify'
+                      : 'Sign up'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -147,6 +201,20 @@ export default function SignupScreen({ navigation, onSignup }: Props) {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+function getClerkErrorMessage(err: unknown) {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'errors' in err &&
+    Array.isArray((err as { errors?: unknown }).errors)
+  ) {
+    const [firstError] = (err as { errors: Array<{ message?: string }> }).errors;
+    return firstError?.message ?? 'Unable to continue.';
+  }
+
+  return 'Unable to continue.';
 }
 
 const styles = StyleSheet.create({

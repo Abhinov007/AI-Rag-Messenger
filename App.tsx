@@ -1,22 +1,18 @@
 import './global.css';
 import React, { useEffect, useState } from 'react';
+import { ClerkProvider, useAuth, useClerk } from '@clerk/expo';
+import { tokenCache } from '@clerk/expo/token-cache';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import type { AppStackParamList } from './src/navigation/types';
 import { initializeDatabase } from './src/db/database';
-import {
-  getCurrentUser,
-  login,
-  logout,
-  signup,
-} from './src/services/authStorage';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -27,17 +23,35 @@ export type { AppStackParamList } from './src/navigation/types';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
+const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  if (!publishableKey) {
+    return (
+      <View className="flex-1 items-center justify-center bg-[#071A14] px-6">
+        <Text className="text-center text-base font-bold text-white">
+          Add EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY to your environment.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+      <AppContent />
+    </ClerkProvider>
+  );
+}
+
+function AppContent() {
+  const { isLoaded, isSignedIn } = useAuth();
+  const { signOut } = useClerk();
   const [isInitializingApp, setIsInitializingApp] = useState(true);
 
   useEffect(() => {
     async function prepareApp() {
       try {
         await initializeDatabase();
-        const user = await getCurrentUser();
-        setIsAuthenticated(Boolean(user));
       } finally {
         setIsInitializingApp(false);
       }
@@ -47,11 +61,10 @@ export default function App() {
   }, []);
 
   async function handleLogout() {
-    await logout();
-    setIsAuthenticated(false);
+    await signOut();
   }
 
-  if (isInitializingApp) {
+  if (isInitializingApp || !isLoaded) {
     return (
       <View className="flex-1 items-center justify-center bg-[#071A14]">
         <ActivityIndicator color="#25D366" size="large" />
@@ -63,7 +76,7 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <NavigationContainer>
-        {isAuthenticated ? (
+        {isSignedIn ? (
           <AppStack.Navigator
             initialRouteName="ChatList"
             screenOptions={{ headerShown: false }}
@@ -75,36 +88,8 @@ export default function App() {
           </AppStack.Navigator>
         ) : (
         <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-          <AuthStack.Screen name="Login">
-            {(props) => (
-              <LoginScreen
-                {...props}
-                onLogin={async (email, password) => {
-                  const result = await login(email, password);
-                  if (result.ok) {
-                    setIsAuthenticated(true);
-                  }
-
-                  return result;
-                }}
-              />
-            )}
-          </AuthStack.Screen>
-          <AuthStack.Screen name="Signup">
-            {(props) => (
-              <SignupScreen
-                {...props}
-                onSignup={async (name, email, password) => {
-                  const result = await signup(name, email, password);
-                  if (result.ok) {
-                    setIsAuthenticated(true);
-                  }
-
-                  return result;
-                }}
-              />
-            )}
-          </AuthStack.Screen>
+          <AuthStack.Screen name="Login" component={LoginScreen} />
+          <AuthStack.Screen name="Signup" component={SignupScreen} />
         </AuthStack.Navigator>
         )}
         </NavigationContainer>
