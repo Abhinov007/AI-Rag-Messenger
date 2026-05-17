@@ -15,3 +15,19 @@ on public.messages (clerk_user_id, local_id);
 
 create index if not exists messages_clerk_user_conversation_id_idx
 on public.messages (clerk_user_id, conversation_id);
+
+alter table public.messages enable row level security;
+
+drop policy if exists "anon can insert messages" on public.messages;
+create policy "anon can insert messages"
+on public.messages
+for insert
+to anon
+with check (true);
+
+drop policy if exists "anon can read messages" on public.messages;
+create policy "anon can read messages"
+on public.messages
+for select
+to anon
+using (true);

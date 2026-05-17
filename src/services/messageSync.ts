@@ -39,6 +39,7 @@ export async function syncPendingMessages(clerkUserId: string) {
 async function pushMessageToSupabase(message: Message, clerkUserId: string) {
   if (!isSupabaseConfigured || !supabase) {
     await markMessageSyncFailed(message.id, 'Supabase is not configured.');
+    console.warn('Supabase sync skipped: missing configuration.');
     return;
   }
 
@@ -58,10 +59,15 @@ async function pushMessageToSupabase(message: Message, clerkUserId: string) {
 
   if (error) {
     await markMessageSyncFailed(message.id, error.message);
+    console.warn('Supabase message sync failed:', error.message);
     return;
   }
 
   if (data?.id) {
     await markMessageSyncedWithRemoteId(message.id, data.id);
+    console.log('Supabase message synced:', {
+      localId: message.id,
+      remoteId: data.id,
+    });
   }
 }
