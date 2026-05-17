@@ -17,6 +17,8 @@ type MessageRow = {
   sender_type: MessageSenderType;
   body: string;
   summary: string | null;
+  remote_id: string | null;
+  sync_error: string | null;
   synced: number;
   created_at: string;
 };
@@ -31,7 +33,9 @@ function mapMessage(row: MessageRow): Message {
     senderType: row.sender_type,
     body: row.body,
     createdAt: row.created_at,
+    remoteId: row.remote_id ?? null,
     summary: row.summary ?? null,
+    syncError: row.sync_error ?? null,
     synced: row.synced !== 0,
   };
 }
@@ -70,7 +74,8 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       SET sender_type = ?,
           body = ?,
           summary = ?,
-          synced = ?
+          synced = ?,
+          sync_error = NULL
       WHERE id = ? AND conversation_id = ?;
       `,
       message.senderType,
@@ -110,13 +115,39 @@ export async function getMessagesByConversationId(
   const db = await getDatabase();
   const rows = await db.getAllAsync<MessageRow>(
     `
-    SELECT id, conversation_id, sender_type, body, summary, synced, created_at
+    SELECT id, conversation_id, sender_type, body, summary, remote_id, sync_error, synced, created_at
     FROM messages
     WHERE conversation_id = ?
     ORDER BY datetime(created_at) ASC, id ASC;
     `,
     conversationId,
   );
+
+  return rows.map(mapMessage);
+}
+
+export async function getMessageById(messageId: number): Promise<Message | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<MessageRow>(
+    `
+    SELECT id, conversation_id, sender_type, body, summary, remote_id, sync_error, synced, created_at
+    FROM messages
+    WHERE id = ?;
+    `,
+    messageId,
+  );
+
+  return row ? mapMessage(row) : null;
+}
+
+export async function getUnsyncedMessages(): Promise<Message[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<MessageRow>(`
+    SELECT id, conversation_id, sender_type, body, summary, remote_id, sync_error, synced, created_at
+    FROM messages
+    WHERE synced = 0
+    ORDER BY datetime(created_at) ASC, id ASC;
+  `);
 
   return rows.map(mapMessage);
 }
@@ -152,7 +183,34 @@ export async function updateMessageSummary(
 
 export async function markMessageSynced(messageId: number) {
   const db = await getDatabase();
-  await db.runAsync('UPDATE messages SET synced = 1 WHERE id = ?;', messageId);
+  await db.runAsync(
+    'UPDATE messages SET synced = 1, sync_error = NULL WHERE id = ?;',
+    messageId,
+  );
+}
+
+export async function markMessageSyncedWithRemoteId(
+  messageId: number,
+  remoteId: string,
+) {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE messages SET synced = 1, remote_id = ?, sync_error = NULL WHERE id = ?;',
+    remoteId,
+    messageId,
+  );
+}
+
+export async function markMessageSyncFailed(
+  messageId: number,
+  syncError: string,
+) {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE messages SET synced = 0, sync_error = ? WHERE id = ?;',
+    syncError,
+    messageId,
+  );
 }
 
 /**

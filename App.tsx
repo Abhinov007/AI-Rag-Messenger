@@ -44,7 +44,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, userId } = useAuth();
   const { signOut } = useClerk();
   const [isInitializingApp, setIsInitializingApp] = useState(true);
 
@@ -59,6 +59,18 @@ function AppContent() {
 
     prepareApp();
   }, []);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || !userId) {
+      return;
+    }
+
+    import('./src/services/messageSync')
+      .then(({ syncPendingMessages }) => syncPendingMessages(userId))
+      .catch(() => {
+        // Sync is best-effort; local SQLite remains the source of truth offline.
+      });
+  }, [isLoaded, isSignedIn, userId]);
 
   async function handleLogout() {
     await signOut();

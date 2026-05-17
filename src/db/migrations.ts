@@ -29,6 +29,8 @@ async function ensureColumn(
 async function migrateLegacySchema(db: SQLiteDatabase) {
   await ensureColumn(db, 'conversations', 'last_message', 'TEXT');
   await ensureColumn(db, 'messages', 'summary', 'TEXT');
+  await ensureColumn(db, 'messages', 'remote_id', 'TEXT');
+  await ensureColumn(db, 'messages', 'sync_error', 'TEXT');
   await ensureColumn(
     db,
     'messages',
@@ -58,6 +60,8 @@ export async function runMigrations(db: SQLiteDatabase) {
       sender_type TEXT NOT NULL CHECK (sender_type IN ('user', 'assistant', 'system')),
       body TEXT NOT NULL,
       summary TEXT,
+      remote_id TEXT,
+      sync_error TEXT,
       synced INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE

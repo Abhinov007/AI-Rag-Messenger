@@ -6,8 +6,12 @@ export type Message = {
   senderType: MessageSenderType;
   body: string;
   createdAt: string;
+  /** Supabase row id after this local message has synced remotely. */
+  remoteId: string | null;
   /** Optional local RAG / sync summary text. */
   summary: string | null;
+  /** Last Supabase sync error, if a push failed. */
+  syncError: string | null;
   /** Whether this row has been persisted to a remote backend. */
   synced: boolean;
 };

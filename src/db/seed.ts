@@ -102,8 +102,8 @@ async function createSeedMessage(
 ) {
   await db.runAsync(
     `
-    INSERT INTO messages (conversation_id, sender_type, body)
-    VALUES (?, ?, ?);
+    INSERT INTO messages (conversation_id, sender_type, body, synced)
+    VALUES (?, ?, ?, 1);
     `,
     conversationId,
     senderType,

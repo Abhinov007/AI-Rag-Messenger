@@ -3,6 +3,7 @@
  */
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useAuth } from '@clerk/expo';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { getConversationById } from '../db/conversationRepository';
 import { addMessage, getMessagesByConversationId } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
+import { syncMessageById } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 
@@ -33,6 +35,7 @@ type Props = {
 
 export default function ChatScreen({ navigation, route }: Props) {
   const { conversationId, title: titleParam } = route.params;
+  const { userId } = useAuth();
   const [title, setTitle] = useState(titleParam ?? 'Chat');
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState('');
@@ -84,7 +87,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     setIsSending(true);
     setDraft('');
     try {
-      await addMessage(conversationId, 'user', text);
+      const messageId = await addMessage(conversationId, 'user', text);
+      if (userId) {
+        await syncMessageById(messageId, userId);
+      }
       await loadThread();
     } finally {
       setIsSending(false);
