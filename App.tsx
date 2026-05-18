@@ -7,12 +7,16 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ActivityIndicator, Text, View } from 'react-native';
+import { debugDatabaseHealthCheck } from './src/db/debugDatabase';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
 import ChatScreen from './src/screens/ChatScreen';
+
 import type { AppStackParamList } from './src/navigation/types';
+import { env } from './src/config/env';
 import { initializeDatabase } from './src/db/database';
+import { syncPendingMessages } from './src/services/messageSync';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -23,10 +27,9 @@ export type { AppStackParamList } from './src/navigation/types';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
-const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 export default function App() {
-  if (!publishableKey) {
+  if (!env.clerkPublishableKey) {
     return (
       <View className="flex-1 items-center justify-center bg-[#071A14] px-6">
         <Text className="text-center text-base font-bold text-white">
@@ -37,14 +40,14 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+    <ClerkProvider publishableKey={env.clerkPublishableKey} tokenCache={tokenCache}>
       <AppContent />
     </ClerkProvider>
   );
 }
 
 function AppContent() {
-  const { isLoaded, isSignedIn, userId } = useAuth();
+  const { isLoaded, isSignedIn, userId, getToken } = useAuth();
   const { signOut } = useClerk();
   const [isInitializingApp, setIsInitializingApp] = useState(true);
 
@@ -52,11 +55,12 @@ function AppContent() {
     async function prepareApp() {
       try {
         await initializeDatabase();
+        await debugDatabaseHealthCheck();
       } finally {
         setIsInitializingApp(false);
       }
     }
-
+  
     prepareApp();
   }, []);
 
@@ -65,12 +69,20 @@ function AppContent() {
       return;
     }
 
-    import('./src/services/messageSync')
-      .then(({ syncPendingMessages }) => syncPendingMessages(userId))
-      .catch(() => {
-        // Sync is best-effort; local SQLite remains the source of truth offline.
-      });
-  }, [isLoaded, isSignedIn, userId]);
+    const getClerkToken = async (): Promise<string | null> => {
+      const token = await getToken({ template: 'supabase' });
+
+      if (typeof token === 'string') {
+        return token;
+      }
+
+      return null;
+    };
+
+    syncPendingMessages(userId, getClerkToken).catch((error) => {
+      console.warn('Pending message sync failed:', error);
+    });
+  }, [isLoaded, isSignedIn, userId, getToken]);
 
   async function handleLogout() {
     await signOut();
@@ -88,22 +100,23 @@ function AppContent() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <NavigationContainer>
-        {isSignedIn ? (
-          <AppStack.Navigator
-            initialRouteName="ChatList"
-            screenOptions={{ headerShown: false }}
-          >
-            <AppStack.Screen name="ChatList">
-              {() => <ChatListScreen onLogout={handleLogout} />}
-            </AppStack.Screen>
-            <AppStack.Screen name="Chat" component={ChatScreen} />
-          </AppStack.Navigator>
-        ) : (
-        <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-          <AuthStack.Screen name="Login" component={LoginScreen} />
-          <AuthStack.Screen name="Signup" component={SignupScreen} />
-        </AuthStack.Navigator>
-        )}
+          {isSignedIn ? (
+            <AppStack.Navigator
+              initialRouteName="ChatList"
+              screenOptions={{ headerShown: false }}
+            >
+              <AppStack.Screen name="ChatList">
+                {() => <ChatListScreen onLogout={handleLogout} />}
+              </AppStack.Screen>
+
+              <AppStack.Screen name="Chat" component={ChatScreen} />
+            </AppStack.Navigator>
+          ) : (
+            <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+              <AuthStack.Screen name="Login" component={LoginScreen} />
+              <AuthStack.Screen name="Signup" component={SignupScreen} />
+            </AuthStack.Navigator>
+          )}
         </NavigationContainer>
       </SafeAreaProvider>
     </GestureHandlerRootView>

@@ -5,6 +5,7 @@
  * local rows to Supabase and mark each local row as synced only after Supabase
  * confirms the insert.
  */
+
 import {
   getMessageById,
   getUnsyncedMessages,
@@ -12,36 +13,61 @@ import {
   markMessageSyncedWithRemoteId,
 } from '../db/messageRepository';
 import type { Message } from '../types/message';
-import { isSupabaseConfigured, supabase } from './supabase';
+import { createSupabaseClient } from './supabase';
 
 type RemoteMessageRow = {
   id: string;
 };
 
-export async function syncMessageById(messageId: number, clerkUserId: string) {
+type GetClerkToken = () => Promise<string | null>;
+
+export async function syncMessageById(
+  messageId: number,
+  clerkUserId: string,
+  getClerkToken: GetClerkToken
+) {
   const message = await getMessageById(messageId);
 
   if (!message || message.synced) {
     return;
   }
 
-  await pushMessageToSupabase(message, clerkUserId);
+  await pushMessageToSupabase(message, clerkUserId, getClerkToken);
 }
 
-export async function syncPendingMessages(clerkUserId: string) {
+export async function syncPendingMessages(
+  clerkUserId: string,
+  getClerkToken: GetClerkToken
+) {
   const messages = await getUnsyncedMessages();
 
+  console.log('Supabase pending sync check:', {
+    pendingCount: messages.length,
+  });
+
   for (const message of messages) {
-    await pushMessageToSupabase(message, clerkUserId);
+    await pushMessageToSupabase(message, clerkUserId, getClerkToken);
   }
 }
 
-async function pushMessageToSupabase(message: Message, clerkUserId: string) {
-  if (!isSupabaseConfigured || !supabase) {
-    await markMessageSyncFailed(message.id, 'Supabase is not configured.');
-    console.warn('Supabase sync skipped: missing configuration.');
+async function pushMessageToSupabase(
+  message: Message,
+  clerkUserId: string,
+  getClerkToken: GetClerkToken
+) {
+  const supabase = createSupabaseClient(getClerkToken);
+
+  if (!supabase) {
+    await markMessageSyncFailed(message.id, 'Supabase client could not be created.');
+    console.warn('Supabase sync skipped: client could not be created.');
     return;
   }
+
+  console.log('Trying Supabase sync:', {
+    localId: message.id,
+    conversationId: message.conversationId,
+    clerkUserId,
+  });
 
   const { data, error } = await supabase
     .from('messages')

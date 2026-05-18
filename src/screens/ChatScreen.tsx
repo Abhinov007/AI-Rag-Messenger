@@ -1,197 +1,230 @@
-/**
+ /**
  * Single-conversation thread: loads messages from SQLite and supports sending.
  */
-import type { RouteProp } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useAuth } from '@clerk/expo';
-import React, { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { getConversationById } from '../db/conversationRepository';
-import { addMessage, getMessagesByConversationId } from '../db/messageRepository';
-import type { AppStackParamList } from '../navigation/types';
-import { syncMessageById } from '../services/messageSync';
-import type { Message } from '../types/message';
-import { formatMessageTime } from '../utils/date';
+ import type { RouteProp } from '@react-navigation/native';
+ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+ import { useAuth } from '@clerk/expo';
+ import React, { useCallback, useEffect, useState } from 'react';
+ import {
+   ActivityIndicator,
+   FlatList,
+   KeyboardAvoidingView,
+   Platform,
+   StatusBar,
+   StyleSheet,
+   Text,
+   TextInput,
+   TouchableOpacity,
+   View,
+ } from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ 
+ import { getConversationById } from '../db/conversationRepository';
+ import { addMessage, getMessagesByConversationId } from '../db/messageRepository';
+ import type { AppStackParamList } from '../navigation/types';
+ import { syncMessageById } from '../services/messageSync';
+ import type { Message } from '../types/message';
+ import { formatMessageTime } from '../utils/date';
+ 
+ type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
+ type ChatRoute = RouteProp<AppStackParamList, 'Chat'>;
+ 
+ type Props = {
+   navigation: Navigation;
+   route: ChatRoute;
+ };
+ 
+ export default function ChatScreen({ navigation, route }: Props) {
+   const { conversationId, title: titleParam } = route.params;
+   const { userId, getToken } = useAuth();
+ 
+   const [title, setTitle] = useState(titleParam ?? 'Chat');
+   const [messages, setMessages] = useState<Message[]>([]);
+   const [draft, setDraft] = useState('');
+   const [isLoading, setIsLoading] = useState(true);
+   const [isSending, setIsSending] = useState(false);
+   const [error, setError] = useState('');
+ 
+   const getClerkToken = useCallback(async (): Promise<string | null> => {
+     const token = await getToken({ template: 'supabase' });
+ 
+     if (typeof token === 'string') {
+       return token;
+     }
+ 
+     return null;
+   }, [getToken]);
+ 
+   const loadThread = useCallback(async () => {
+     const conversation = await getConversationById(conversationId);
+ 
+     if (!conversation) {
+       setError('Conversation not found.');
+       setMessages([]);
+       return;
+     }
+ 
+     setTitle(conversation.title ?? 'Chat');
+     setError('');
+ 
+     const rows = await getMessagesByConversationId(conversationId);
+     setMessages(rows);
+   }, [conversationId]);
+ 
+   useEffect(() => {
+     let cancelled = false;
+ 
+     async function run() {
+       setIsLoading(true);
+ 
+       try {
+         await loadThread();
+       } finally {
+         if (!cancelled) {
+           setIsLoading(false);
+         }
+       }
+     }
+ 
+     run();
+ 
+     return () => {
+       cancelled = true;
+     };
+   }, [loadThread]);
+ 
+   async function handleSend() {
+     const text = draft.trim();
+ 
+     if (!text || isSending) {
+       return;
+     }
+ 
+     setIsSending(true);
+     setDraft('');
+ 
+     try {
+       const messageId = await addMessage(conversationId, 'user', text);
+ 
+       if (userId) {
+         await syncMessageById(messageId, userId, getClerkToken);
+       }
+ 
+       await loadThread();
+     } finally {
+       setIsSending(false);
+     }
+   }
+ 
+   return (
+     <SafeAreaView style={styles.safe} edges={['top']}>
+       <StatusBar barStyle="light-content" />
+ 
+       <View style={styles.header}>
+         <TouchableOpacity
+           activeOpacity={0.7}
+           onPress={() => navigation.goBack()}
+           style={styles.backBtn}
+         >
+           <Text style={styles.backLabel}>{'< Back'}</Text>
+         </TouchableOpacity>
+ 
+         <Text numberOfLines={1} style={styles.headerTitle}>
+           {title}
+         </Text>
+ 
+         <View style={styles.headerSpacer} />
+       </View>
+ 
+       <KeyboardAvoidingView
+         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+         style={styles.flex}
+       >
+         {isLoading ? (
+           <View style={styles.centered}>
+             <ActivityIndicator color="#25D366" />
+           </View>
+         ) : error ? (
+           <View style={styles.centered}>
+             <Text style={styles.errorText}>{error}</Text>
+           </View>
+         ) : (
+           <FlatList
+             contentContainerStyle={styles.listContent}
+             data={messages}
+             keyExtractor={(item) => String(item.id)}
+             renderItem={({ item }) => (
+               <View
+                 style={[
+                   styles.bubbleWrap,
+                   item.senderType === 'user'
+                     ? styles.bubbleWrapUser
+                     : styles.bubbleWrapOther,
+                 ]}
+               >
+                 <View
+                   style={[
+                     styles.bubble,
+                     item.senderType === 'user'
+                       ? styles.bubbleUser
+                       : styles.bubbleOther,
+                   ]}
+                 >
+                   <Text style={styles.bubbleMeta}>
+                     {item.senderType === 'user'
+                       ? 'You'
+                       : item.senderType === 'assistant'
+                         ? 'Assistant'
+                         : 'System'}
+                   </Text>
+ 
+                   <Text style={styles.bubbleBody}>{item.body}</Text>
+ 
+                   <Text style={styles.messageTime}>
+                     {formatMessageTime(item.createdAt)}
+                   </Text>
+                 </View>
+               </View>
+             )}
+             ListEmptyComponent={
+               <Text style={styles.emptyThread}>
+                 No messages yet. Say hello below.
+               </Text>
+             }
+           />
+         )}
+ 
+         <View style={styles.composer}>
+           <TextInput
+             editable={!isLoading && !error}
+             multiline
+             onChangeText={setDraft}
+             placeholder="Message"
+             placeholderTextColor="#789185"
+             style={styles.input}
+             value={draft}
+           />
+ 
+           <TouchableOpacity
+             activeOpacity={0.78}
+             disabled={isSending || !draft.trim() || Boolean(error)}
+             onPress={handleSend}
+             style={[
+               styles.sendBtn,
+               (isSending || !draft.trim() || Boolean(error)) &&
+                 styles.sendBtnDisabled,
+             ]}
+           >
+             <Text style={styles.sendLabel}>{isSending ? '...' : 'Send'}</Text>
+           </TouchableOpacity>
+         </View>
+       </KeyboardAvoidingView>
+     </SafeAreaView>
+   );
+ }
+ 
 
-type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
-type ChatRoute = RouteProp<AppStackParamList, 'Chat'>;
-
-type Props = {
-  navigation: Navigation;
-  route: ChatRoute;
-};
-
-export default function ChatScreen({ navigation, route }: Props) {
-  const { conversationId, title: titleParam } = route.params;
-  const { userId } = useAuth();
-  const [title, setTitle] = useState(titleParam ?? 'Chat');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState('');
-
-  const loadThread = useCallback(async () => {
-    const conversation = await getConversationById(conversationId);
-    if (!conversation) {
-      setError('Conversation not found.');
-      setMessages([]);
-      return;
-    }
-
-    setTitle(conversation.title ?? 'Chat');
-    setError('');
-    const rows = await getMessagesByConversationId(conversationId);
-    setMessages(rows);
-  }, [conversationId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function run() {
-      setIsLoading(true);
-      try {
-        await loadThread();
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    }
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [loadThread]);
-
-  async function handleSend() {
-    const text = draft.trim();
-    if (!text || isSending) {
-      return;
-    }
-
-    setIsSending(true);
-    setDraft('');
-    try {
-      const messageId = await addMessage(conversationId, 'user', text);
-      if (userId) {
-        await syncMessageById(messageId, userId);
-      }
-      await loadThread();
-    } finally {
-      setIsSending(false);
-    }
-  }
-
-  return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="light-content" />
-
-      <View style={styles.header}>
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}
-        >
-          <Text style={styles.backLabel}>{'< Back'}</Text>
-        </TouchableOpacity>
-        <Text numberOfLines={1} style={styles.headerTitle}>
-          {title}
-        </Text>
-        <View style={styles.headerSpacer} />
-      </View>
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-        style={styles.flex}
-      >
-        {isLoading ? (
-          <View style={styles.centered}>
-            <ActivityIndicator color="#25D366" />
-          </View>
-        ) : error ? (
-          <View style={styles.centered}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : (
-          <FlatList
-            contentContainerStyle={styles.listContent}
-            data={messages}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={({ item }) => (
-              <View
-                style={[
-                  styles.bubbleWrap,
-                  item.senderType === 'user' ? styles.bubbleWrapUser : styles.bubbleWrapOther,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.bubble,
-                    item.senderType === 'user' ? styles.bubbleUser : styles.bubbleOther,
-                  ]}
-                >
-                  <Text style={styles.bubbleMeta}>
-                    {item.senderType === 'user'
-                      ? 'You'
-                      : item.senderType === 'assistant'
-                        ? 'Assistant'
-                        : 'System'}
-                  </Text>
-                  <Text style={styles.bubbleBody}>{item.body}</Text>
-                  <Text style={styles.messageTime}>
-                    {formatMessageTime(item.createdAt)}
-                  </Text>
-                </View>
-              </View>
-            )}
-            ListEmptyComponent={
-              <Text style={styles.emptyThread}>No messages yet. Say hello below.</Text>
-            }
-          />
-        )}
-
-        <View style={styles.composer}>
-          <TextInput
-            editable={!isLoading && !error}
-            multiline
-            onChangeText={setDraft}
-            placeholder="Message"
-            placeholderTextColor="#789185"
-            style={styles.input}
-            value={draft}
-          />
-          <TouchableOpacity
-            activeOpacity={0.78}
-            disabled={isSending || !draft.trim() || Boolean(error)}
-            onPress={handleSend}
-            style={[
-              styles.sendBtn,
-              (isSending || !draft.trim() || error) && styles.sendBtnDisabled,
-            ]}
-          >
-            <Text style={styles.sendLabel}>{isSending ? '...' : 'Send'}</Text>
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-}
 
 const styles = StyleSheet.create({
   safe: {
