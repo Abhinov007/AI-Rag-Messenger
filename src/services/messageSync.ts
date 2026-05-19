@@ -3,7 +3,7 @@
  *
  * The app always stores messages locally first. These helpers push unsynced
  * local rows to Supabase and mark each local row as synced only after Supabase
- * confirms the insert.
+ * confirms the insert/upsert.
  */
 
 import {
@@ -58,7 +58,11 @@ async function pushMessageToSupabase(
   const supabase = createSupabaseClient(getClerkToken);
 
   if (!supabase) {
-    await markMessageSyncFailed(message.id, 'Supabase client could not be created.');
+    await markMessageSyncFailed(
+      message.id,
+      'Supabase client could not be created.'
+    );
+
     console.warn('Supabase sync skipped: client could not be created.');
     return;
   }
@@ -69,28 +73,74 @@ async function pushMessageToSupabase(
     clerkUserId,
   });
 
+  const payload = {
+    local_id: message.id,
+    conversation_id: message.conversationId,
+    clerk_user_id: clerkUserId,
+    sender_type: message.senderType,
+    body: message.body,
+    summary: message.summary,
+    created_at: message.createdAt,
+  };
+
   const { data, error } = await supabase
     .from('messages')
-    .insert({
-      local_id: message.id,
-      conversation_id: message.conversationId,
-      clerk_user_id: clerkUserId,
-      sender_type: message.senderType,
-      body: message.body,
-      summary: message.summary,
-      created_at: message.createdAt,
+    .upsert(payload, {
+      onConflict: 'clerk_user_id,local_id',
     })
     .select('id')
     .single<RemoteMessageRow>();
 
   if (error) {
+    const isDuplicateError =
+      error.code === '23505' ||
+      error.message.includes('duplicate key value') ||
+      error.message.includes('messages_clerk_user_local_id_idx');
+
+    if (isDuplicateError) {
+      console.warn(
+        'Duplicate message found in Supabase. Fetching existing remote row...'
+      );
+
+      const { data: existingRow, error: fetchError } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('clerk_user_id', clerkUserId)
+        .eq('local_id', message.id)
+        .single<RemoteMessageRow>();
+
+      if (fetchError) {
+        await markMessageSyncFailed(message.id, fetchError.message);
+
+        console.warn(
+          'Failed to fetch duplicate Supabase message:',
+          fetchError.message
+        );
+
+        return;
+      }
+
+      if (existingRow?.id) {
+        await markMessageSyncedWithRemoteId(message.id, existingRow.id);
+
+        console.log('Recovered duplicate Supabase message:', {
+          localId: message.id,
+          remoteId: existingRow.id,
+        });
+
+        return;
+      }
+    }
+
     await markMessageSyncFailed(message.id, error.message);
+
     console.warn('Supabase message sync failed:', error.message);
     return;
   }
 
   if (data?.id) {
     await markMessageSyncedWithRemoteId(message.id, data.id);
+
     console.log('Supabase message synced:', {
       localId: message.id,
       remoteId: data.id,
