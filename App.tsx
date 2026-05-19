@@ -17,6 +17,7 @@ import type { AppStackParamList } from './src/navigation/types';
 import { env } from './src/config/env';
 import { initializeDatabase } from './src/db/database';
 import { syncPendingMessages } from './src/services/messageSync';
+import SyncBootstrapper from './src/components/SyncBootstrapper';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -41,6 +42,7 @@ export default function App() {
 
   return (
     <ClerkProvider publishableKey={env.clerkPublishableKey} tokenCache={tokenCache}>
+      <SyncBootstrapper />
       <AppContent />
     </ClerkProvider>
   );

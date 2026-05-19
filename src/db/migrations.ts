@@ -15,7 +15,9 @@ async function ensureColumn(
   const rows = await db.getAllAsync<{ name: string }>(
     `PRAGMA table_info(${table});`,
   );
+
   const names = new Set(rows.map((r) => r.name));
+
   if (!names.has(column)) {
     await db.execAsync(
       `ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`,
@@ -28,6 +30,17 @@ async function ensureColumn(
  */
 async function migrateLegacySchema(db: SQLiteDatabase) {
   await ensureColumn(db, 'conversations', 'last_message', 'TEXT');
+
+  // Conversation sync fields
+  await ensureColumn(db, 'conversations', 'remote_id', 'TEXT');
+  await ensureColumn(
+    db,
+    'conversations',
+    'synced',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+  await ensureColumn(db, 'conversations', 'sync_error', 'TEXT');
+
   await ensureColumn(db, 'messages', 'summary', 'TEXT');
   await ensureColumn(db, 'messages', 'remote_id', 'TEXT');
   await ensureColumn(db, 'messages', 'sync_error', 'TEXT');
@@ -50,6 +63,9 @@ export async function runMigrations(db: SQLiteDatabase) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT,
       last_message TEXT,
+      remote_id TEXT,
+      sync_error TEXT,
+      synced INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );

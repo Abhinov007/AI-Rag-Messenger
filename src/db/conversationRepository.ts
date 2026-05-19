@@ -19,16 +19,16 @@ type ConversationRow = {
   title: string | null;
   created_at: string;
   updated_at: string;
+
+  remote_id: string | null;
+  synced: number;
+  sync_error: string | null;
 };
 
 /**
  * Raw row shape returned by the chat-list query.
  */
-type ConversationListRow = {
-  id: number;
-  title: string | null;
-  created_at: string;
-  updated_at: string;
+type ConversationListRow = ConversationRow & {
   last_message: string | null;
   last_message_at: string | null;
   message_count: number;
@@ -43,6 +43,10 @@ function mapConversation(row: ConversationRow): Conversation {
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+
+    remoteId: row.remote_id,
+    synced: Boolean(row.synced),
+    syncError: row.sync_error,
   };
 }
 
@@ -67,8 +71,13 @@ export async function createConversation(
   conversation: ConversationCreateInput,
 ): Promise<number> {
   const db = await getDatabase();
+
   const result = await db.runAsync(
-    'INSERT INTO conversations (title) VALUES (?);',
+    `
+    INSERT INTO conversations
+    (title, synced, sync_error)
+    VALUES (?, 0, NULL);
+    `,
     conversation.title?.trim() || null,
   );
 
@@ -81,12 +90,16 @@ export async function createConversation(
  */
 export async function getConversations(): Promise<ConversationListItem[]> {
   const db = await getDatabase();
+
   const rows = await db.getAllAsync<ConversationListRow>(`
     SELECT
       conversations.id,
       conversations.title,
       conversations.created_at,
       conversations.updated_at,
+      conversations.remote_id,
+      conversations.synced,
+      conversations.sync_error,
       COALESCE(conversations.last_message, latest_message.body) AS last_message,
       latest_message.created_at AS last_message_at,
       COUNT(messages.id) AS message_count
@@ -120,8 +133,20 @@ export async function getConversationById(
   id: number,
 ): Promise<Conversation | null> {
   const db = await getDatabase();
+
   const row = await db.getFirstAsync<ConversationRow>(
-    'SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?;',
+    `
+    SELECT
+      id,
+      title,
+      created_at,
+      updated_at,
+      remote_id,
+      synced,
+      sync_error
+    FROM conversations
+    WHERE id = ?;
+    `,
     id,
   );
 
@@ -136,6 +161,72 @@ export async function getConversation(
 }
 
 /**
+ * Returns all conversations that still need to be pushed to Supabase.
+ */
+export async function getUnsyncedConversations(): Promise<Conversation[]> {
+  const db = await getDatabase();
+
+  const rows = await db.getAllAsync<ConversationRow>(`
+    SELECT
+      id,
+      title,
+      created_at,
+      updated_at,
+      remote_id,
+      synced,
+      sync_error
+    FROM conversations
+    WHERE synced = 0
+    ORDER BY datetime(created_at) ASC, id ASC;
+  `);
+
+  return rows.map(mapConversation);
+}
+
+/**
+ * Marks a local conversation as synced after Supabase returns the remote UUID.
+ */
+export async function markConversationSyncedWithRemoteId(
+  conversationId: number,
+  remoteId: string,
+) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    UPDATE conversations
+    SET synced = 1,
+        remote_id = ?,
+        sync_error = NULL
+    WHERE id = ?;
+    `,
+    remoteId,
+    conversationId,
+  );
+}
+
+/**
+ * Stores the latest sync error for a conversation.
+ */
+export async function markConversationSyncFailed(
+  conversationId: number,
+  error: string,
+) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    UPDATE conversations
+    SET synced = 0,
+        sync_error = ?
+    WHERE id = ?;
+    `,
+    error,
+    conversationId,
+  );
+}
+
+/**
  * Updates the denormalized last-message preview and bumps `updated_at` so the
  * chat list reflects recent activity even before a new `messages` row exists.
  */
@@ -144,10 +235,13 @@ export async function updateConversationLastMessage(
   lastMessage: string,
 ) {
   const db = await getDatabase();
+
   await db.runAsync(
     `
     UPDATE conversations
-    SET last_message = ?, updated_at = CURRENT_TIMESTAMP
+    SET last_message = ?,
+        updated_at = CURRENT_TIMESTAMP,
+        synced = 0
     WHERE id = ?;
     `,
     lastMessage.trim(),
@@ -163,10 +257,13 @@ export async function renameConversation(
   title: string,
 ) {
   const db = await getDatabase();
+
   await db.runAsync(
     `
     UPDATE conversations
-    SET title = ?, updated_at = CURRENT_TIMESTAMP
+    SET title = ?,
+        updated_at = CURRENT_TIMESTAMP,
+        synced = 0
     WHERE id = ?;
     `,
     title.trim(),
@@ -180,5 +277,6 @@ export async function renameConversation(
  */
 export async function deleteConversation(conversationId: number) {
   const db = await getDatabase();
+
   await db.runAsync('DELETE FROM conversations WHERE id = ?;', conversationId);
 }

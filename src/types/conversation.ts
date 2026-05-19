@@ -3,6 +3,10 @@ export type Conversation = {
   title: string | null;
   createdAt: string;
   updatedAt: string;
+
+  remoteId?: string | null;
+  synced?: boolean;
+  syncError?: string | null;
 };
 
 /** Payload for `createConversation` before the database assigns id and timestamps. */
