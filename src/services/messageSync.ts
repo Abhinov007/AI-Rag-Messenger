@@ -12,8 +12,10 @@ import {
   markMessageSyncFailed,
   markMessageSyncedWithRemoteId,
 } from '../db/messageRepository';
+import { getConversationById } from '../db/conversationRepository';
 import type { Message } from '../types/message';
 import { createSupabaseClient } from './supabase';
+import { syncPendingConversations } from './conversationSync';
 
 type RemoteMessageRow = {
   id: string;
@@ -24,7 +26,7 @@ type GetClerkToken = () => Promise<string | null>;
 export async function syncMessageById(
   messageId: number,
   clerkUserId: string,
-  getClerkToken: GetClerkToken
+  getClerkToken: GetClerkToken,
 ) {
   const message = await getMessageById(messageId);
 
@@ -37,7 +39,7 @@ export async function syncMessageById(
 
 export async function syncPendingMessages(
   clerkUserId: string,
-  getClerkToken: GetClerkToken
+  getClerkToken: GetClerkToken,
 ) {
   const messages = await getUnsyncedMessages();
 
@@ -50,32 +52,88 @@ export async function syncPendingMessages(
   }
 }
 
+async function getRemoteConversationIdForMessage(
+  message: Message,
+  clerkUserId: string,
+  getClerkToken: GetClerkToken,
+): Promise<string | null> {
+  let conversation = await getConversationById(message.conversationId);
+
+  if (conversation?.remoteId) {
+    return conversation.remoteId;
+  }
+
+  console.log(
+    'Message conversation is not synced yet. Syncing conversations first...',
+    {
+      localConversationId: message.conversationId,
+    },
+  );
+
+  await syncPendingConversations(clerkUserId, getClerkToken);
+
+  conversation = await getConversationById(message.conversationId);
+
+  if (conversation?.remoteId) {
+    return conversation.remoteId;
+  }
+
+  return null;
+}
+
 async function pushMessageToSupabase(
   message: Message,
   clerkUserId: string,
-  getClerkToken: GetClerkToken
+  getClerkToken: GetClerkToken,
 ) {
   const supabase = createSupabaseClient(getClerkToken);
 
   if (!supabase) {
     await markMessageSyncFailed(
       message.id,
-      'Supabase client could not be created.'
+      'Supabase client could not be created.',
     );
 
     console.warn('Supabase sync skipped: client could not be created.');
     return;
   }
 
+  const remoteConversationId = await getRemoteConversationIdForMessage(
+    message,
+    clerkUserId,
+    getClerkToken,
+  );
+
+  if (!remoteConversationId) {
+    const errorMessage = `Conversation ${message.conversationId} is not synced yet.`;
+
+    await markMessageSyncFailed(message.id, errorMessage);
+
+    console.warn('Supabase message sync skipped:', {
+      localMessageId: message.id,
+      localConversationId: message.conversationId,
+      reason: errorMessage,
+    });
+
+    return;
+  }
+
   console.log('Trying Supabase sync:', {
     localId: message.id,
-    conversationId: message.conversationId,
+    localConversationId: message.conversationId,
+    remoteConversationId,
     clerkUserId,
   });
 
   const payload = {
     local_id: message.id,
+
+    // Keep the local SQLite conversation id for debug/backward compatibility.
     conversation_id: message.conversationId,
+
+    // Proper Supabase conversation UUID link.
+    conversation_remote_id: remoteConversationId,
+
     clerk_user_id: clerkUserId,
     sender_type: message.senderType,
     body: message.body,
@@ -99,7 +157,7 @@ async function pushMessageToSupabase(
 
     if (isDuplicateError) {
       console.warn(
-        'Duplicate message found in Supabase. Fetching existing remote row...'
+        'Duplicate message found in Supabase. Fetching existing remote row...',
       );
 
       const { data: existingRow, error: fetchError } = await supabase
@@ -114,7 +172,7 @@ async function pushMessageToSupabase(
 
         console.warn(
           'Failed to fetch duplicate Supabase message:',
-          fetchError.message
+          fetchError.message,
         );
 
         return;
@@ -144,6 +202,7 @@ async function pushMessageToSupabase(
     console.log('Supabase message synced:', {
       localId: message.id,
       remoteId: data.id,
+      remoteConversationId,
     });
   }
 }
