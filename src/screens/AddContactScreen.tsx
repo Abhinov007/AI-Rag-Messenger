@@ -7,7 +7,10 @@ import {
   isValidEmail,
   saveContactLocally,
 } from '../db/contactsRepository';
-import { createConversation } from '../db/conversationRepository';
+import {
+  createConversation,
+  getConversationByContactEmail,
+} from '../db/conversationRepository';
 import { syncPendingConversations } from '../services/conversationSync';
 import { findAppUserByEmail, normalizeEmail } from '../services/userDirectory';
 
@@ -50,6 +53,7 @@ export default function AddContactScreen({ navigation }: any) {
     }
 
     const normalizedInputEmail = normalizeEmail(email);
+
     const ownEmail = user?.primaryEmailAddress?.emailAddress
       ? normalizeEmail(user.primaryEmailAddress.emailAddress)
       : null;
@@ -75,6 +79,21 @@ export default function AddContactScreen({ navigation }: any) {
         return;
       }
 
+      const existingConversation = await getConversationByContactEmail(
+        existingUser.normalized_email,
+      );
+
+      if (existingConversation) {
+        Alert.alert('Chat already exists', 'Opening existing chat.');
+
+        navigation.replace('Chat', {
+          conversationId: existingConversation.id,
+          title: existingConversation.title,
+        });
+
+        return;
+      }
+
       const contact = await saveContactLocally({
         clerkUserId: userId,
         name,
@@ -87,6 +106,10 @@ export default function AddContactScreen({ navigation }: any) {
 
       const conversationId = await createConversation({
         title: name.trim(),
+        contactName: name.trim(),
+        contactEmail: existingUser.email,
+        contactNormalizedEmail: existingUser.normalized_email,
+        contactClerkUserId: existingUser.clerk_user_id,
       });
 
       await syncPendingConversations(userId, getClerkToken);

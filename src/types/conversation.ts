@@ -7,10 +7,20 @@ export type Conversation = {
   remoteId?: string | null;
   synced?: boolean;
   syncError?: string | null;
+
+  contactName?: string | null;
+  contactEmail?: string | null;
+  contactNormalizedEmail?: string | null;
+  contactClerkUserId?: string | null;
 };
 
-/** Payload for `createConversation` before the database assigns id and timestamps. */
-export type ConversationCreateInput = Pick<Conversation, 'title'>;
+export type ConversationCreateInput = {
+  title: string | null;
+  contactName?: string | null;
+  contactEmail?: string | null;
+  contactNormalizedEmail?: string | null;
+  contactClerkUserId?: string | null;
+};
 
 export type ConversationListItem = Conversation & {
   lastMessage: string | null;

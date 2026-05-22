@@ -100,6 +100,17 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
   );
   await ensureColumn(db, 'conversations', 'sync_error', 'TEXT');
 
+  // Conversation contact-link fields
+  await ensureColumn(db, 'conversations', 'contact_name', 'TEXT');
+  await ensureColumn(db, 'conversations', 'contact_email', 'TEXT');
+  await ensureColumn(
+    db,
+    'conversations',
+    'contact_normalized_email',
+    'TEXT',
+  );
+  await ensureColumn(db, 'conversations', 'contact_clerk_user_id', 'TEXT');
+
   // Message sync fields
   await ensureColumn(db, 'messages', 'summary', 'TEXT');
   await ensureColumn(db, 'messages', 'remote_id', 'TEXT');
@@ -124,6 +135,16 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
 }
 
 /**
+ * Creates indexes that depend on columns added by legacy migrations.
+ */
+async function createPostMigrationIndexes(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_contact_email
+    ON conversations (contact_normalized_email);
+  `);
+}
+
+/**
  * Creates the local app tables if they do not already exist.
  */
 export async function runMigrations(db: SQLiteDatabase) {
@@ -134,9 +155,16 @@ export async function runMigrations(db: SQLiteDatabase) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT,
       last_message TEXT,
+
       remote_id TEXT,
       sync_error TEXT,
       synced INTEGER NOT NULL DEFAULT 0,
+
+      contact_name TEXT,
+      contact_email TEXT,
+      contact_normalized_email TEXT,
+      contact_clerk_user_id TEXT,
+
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -171,4 +199,5 @@ export async function runMigrations(db: SQLiteDatabase) {
 
   await migrateContactsToEmailSchema(db);
   await migrateLegacySchema(db);
+  await createPostMigrationIndexes(db);
 }

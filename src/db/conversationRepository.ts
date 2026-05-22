@@ -23,6 +23,11 @@ type ConversationRow = {
   remote_id: string | null;
   synced: number;
   sync_error: string | null;
+
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_normalized_email: string | null;
+  contact_clerk_user_id: string | null;
 };
 
 /**
@@ -47,6 +52,11 @@ function mapConversation(row: ConversationRow): Conversation {
     remoteId: row.remote_id,
     synced: Boolean(row.synced),
     syncError: row.sync_error,
+
+    contactName: row.contact_name,
+    contactEmail: row.contact_email,
+    contactNormalizedEmail: row.contact_normalized_email,
+    contactClerkUserId: row.contact_clerk_user_id,
   };
 }
 
@@ -75,10 +85,24 @@ export async function createConversation(
   const result = await db.runAsync(
     `
     INSERT INTO conversations
-    (title, synced, sync_error)
-    VALUES (?, 0, NULL);
+    (
+      title,
+      contact_name,
+      contact_email,
+      contact_normalized_email,
+      contact_clerk_user_id,
+      synced,
+      sync_error
+    )
+    VALUES (?, ?, ?, ?, ?, 0, NULL);
     `,
-    conversation.title?.trim() || null,
+    [
+      conversation.title?.trim() || null,
+      conversation.contactName?.trim() || null,
+      conversation.contactEmail?.trim() || null,
+      conversation.contactNormalizedEmail?.trim().toLowerCase() || null,
+      conversation.contactClerkUserId || null,
+    ],
   );
 
   return Number(result.lastInsertRowId);
@@ -100,6 +124,10 @@ export async function getConversations(): Promise<ConversationListItem[]> {
       conversations.remote_id,
       conversations.synced,
       conversations.sync_error,
+      conversations.contact_name,
+      conversations.contact_email,
+      conversations.contact_normalized_email,
+      conversations.contact_clerk_user_id,
       COALESCE(conversations.last_message, latest_message.body) AS last_message,
       latest_message.created_at AS last_message_at,
       COUNT(messages.id) AS message_count
@@ -143,11 +171,49 @@ export async function getConversationById(
       updated_at,
       remote_id,
       synced,
-      sync_error
+      sync_error,
+      contact_name,
+      contact_email,
+      contact_normalized_email,
+      contact_clerk_user_id
     FROM conversations
     WHERE id = ?;
     `,
     id,
+  );
+
+  return row ? mapConversation(row) : null;
+}
+
+/**
+ * Finds an existing contact-linked conversation by normalized email.
+ *
+ * Used to prevent duplicate chats when the same contact is added again.
+ */
+export async function getConversationByContactEmail(
+  normalizedEmail: string,
+): Promise<Conversation | null> {
+  const db = await getDatabase();
+
+  const row = await db.getFirstAsync<ConversationRow>(
+    `
+    SELECT
+      id,
+      title,
+      created_at,
+      updated_at,
+      remote_id,
+      synced,
+      sync_error,
+      contact_name,
+      contact_email,
+      contact_normalized_email,
+      contact_clerk_user_id
+    FROM conversations
+    WHERE contact_normalized_email = ?
+    LIMIT 1;
+    `,
+    [normalizedEmail.trim().toLowerCase()],
   );
 
   return row ? mapConversation(row) : null;
@@ -174,7 +240,11 @@ export async function getUnsyncedConversations(): Promise<Conversation[]> {
       updated_at,
       remote_id,
       synced,
-      sync_error
+      sync_error,
+      contact_name,
+      contact_email,
+      contact_normalized_email,
+      contact_clerk_user_id
     FROM conversations
     WHERE synced = 0
     ORDER BY datetime(created_at) ASC, id ASC;
