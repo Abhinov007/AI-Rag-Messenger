@@ -8,6 +8,8 @@ export type Conversation = {
   synced?: boolean;
   syncError?: string | null;
 
+  ownerClerkUserId?: string | null;
+
   contactName?: string | null;
   contactEmail?: string | null;
   contactNormalizedEmail?: string | null;
@@ -16,6 +18,7 @@ export type Conversation = {
 
 export type ConversationCreateInput = {
   title: string | null;
+  ownerClerkUserId?: string | null;
   contactName?: string | null;
   contactEmail?: string | null;
   contactNormalizedEmail?: string | null;

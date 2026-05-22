@@ -59,7 +59,10 @@ export default function AddContactScreen({ navigation }: any) {
       : null;
 
     if (ownEmail && normalizedInputEmail === ownEmail) {
-      Alert.alert('Invalid contact', 'You cannot add your own email as a contact.');
+      Alert.alert(
+        'Invalid contact',
+        'You cannot add your own email as a contact.',
+      );
       return;
     }
 
@@ -80,6 +83,7 @@ export default function AddContactScreen({ navigation }: any) {
       }
 
       const existingConversation = await getConversationByContactEmail(
+        userId,
         existingUser.normalized_email,
       );
 
@@ -106,6 +110,7 @@ export default function AddContactScreen({ navigation }: any) {
 
       const conversationId = await createConversation({
         title: name.trim(),
+        ownerClerkUserId: userId,
         contactName: name.trim(),
         contactEmail: existingUser.email,
         contactNormalizedEmail: existingUser.normalized_email,
@@ -120,9 +125,19 @@ export default function AddContactScreen({ navigation }: any) {
         conversationId,
         title: name.trim(),
       });
-    } catch (error) {
-      console.warn('Failed to check/add contact:', error);
-      Alert.alert('Error', 'Could not check or add this user.');
+    } catch (error: any) {
+      console.warn('Failed to check/add contact full error:', {
+        message: error?.message,
+        code: error?.code,
+        details: error?.details,
+        hint: error?.hint,
+        fullError: error,
+      });
+    
+      Alert.alert(
+        'Error',
+        error?.message || 'Could not check or add this user.',
+      );
     } finally {
       setIsSaving(false);
     }

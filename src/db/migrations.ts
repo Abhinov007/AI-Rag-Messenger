@@ -100,7 +100,8 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
   );
   await ensureColumn(db, 'conversations', 'sync_error', 'TEXT');
 
-  // Conversation contact-link fields
+  // Conversation owner/contact-link fields
+  await ensureColumn(db, 'conversations', 'owner_clerk_user_id', 'TEXT');
   await ensureColumn(db, 'conversations', 'contact_name', 'TEXT');
   await ensureColumn(db, 'conversations', 'contact_email', 'TEXT');
   await ensureColumn(
@@ -141,6 +142,9 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
   await db.execAsync(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_contact_email
     ON conversations (contact_normalized_email);
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_owner
+    ON conversations (owner_clerk_user_id);
   `);
 }
 
@@ -160,6 +164,7 @@ export async function runMigrations(db: SQLiteDatabase) {
       sync_error TEXT,
       synced INTEGER NOT NULL DEFAULT 0,
 
+      owner_clerk_user_id TEXT,
       contact_name TEXT,
       contact_email TEXT,
       contact_normalized_email TEXT,

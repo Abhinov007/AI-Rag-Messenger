@@ -16,6 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useAuth } from '@clerk/expo';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -34,6 +35,7 @@ type Props = {
  */
 export default function ChatListScreen({ onLogout }: Props) {
   const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
+  const { userId } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,10 +51,12 @@ export default function ChatListScreen({ onLogout }: Props) {
 
     const title = conversation.title?.toLowerCase() ?? '';
     const lastMessage = conversation.lastMessage?.toLowerCase() ?? '';
+    const contactEmail = conversation.contactEmail?.toLowerCase() ?? '';
 
     return (
       title.includes(normalizedSearchQuery) ||
-      lastMessage.includes(normalizedSearchQuery)
+      lastMessage.includes(normalizedSearchQuery) ||
+      contactEmail.includes(normalizedSearchQuery)
     );
   });
 
@@ -85,13 +89,24 @@ export default function ChatListScreen({ onLogout }: Props) {
         }
 
         try {
-          const rows = await listConversations();
+          if (!userId) {
+            if (isMounted) {
+              setConversations([]);
+              setError('');
+            }
+
+            return;
+          }
+
+          const rows = await listConversations(userId);
 
           if (isMounted) {
             setConversations(rows);
             setError('');
           }
-        } catch {
+        } catch (error) {
+          console.warn('Could not load conversations:', error);
+
           if (isMounted) {
             setError('Could not load conversations.');
           }
@@ -108,7 +123,7 @@ export default function ChatListScreen({ onLogout }: Props) {
       return () => {
         isMounted = false;
       };
-    }, []),
+    }, [userId]),
   );
 
   return (
@@ -136,7 +151,7 @@ export default function ChatListScreen({ onLogout }: Props) {
         <TextInput
           autoCapitalize="none"
           onChangeText={setSearchQuery}
-          placeholder="Search chats"
+          placeholder="Search chats or emails"
           placeholderTextColor="#789185"
           style={styles.searchInput}
           value={searchQuery}
@@ -181,7 +196,7 @@ export default function ChatListScreen({ onLogout }: Props) {
                 </Text>
                 <Text style={styles.emptyText}>
                   {normalizedSearchQuery
-                    ? 'Try searching by conversation name or last message.'
+                    ? 'Try searching by contact name, email, or last message.'
                     : 'Tap Add Contact to save an email and start a new chat.'}
                 </Text>
               </>
