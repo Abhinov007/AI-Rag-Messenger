@@ -140,8 +140,12 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
  */
 async function createPostMigrationIndexes(db: SQLiteDatabase) {
   await db.execAsync(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_contact_email
-    ON conversations (contact_normalized_email);
+    DROP INDEX IF EXISTS idx_conversations_contact_email;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_owner_contact_email
+    ON conversations (owner_clerk_user_id, contact_normalized_email)
+    WHERE owner_clerk_user_id IS NOT NULL
+      AND contact_normalized_email IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_conversations_owner
     ON conversations (owner_clerk_user_id);
