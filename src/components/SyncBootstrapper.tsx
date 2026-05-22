@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { useAuth } from '@clerk/expo';
+import { useAuth, useUser } from '@clerk/expo';
 import { syncPendingConversations } from '../services/conversationSync';
 import { syncPendingMessages } from '../services/messageSync';
+import { registerCurrentUserInDirectory } from '../services/userDirectory';
 
 export default function SyncBootstrapper() {
   const { userId, getToken, isLoaded } = useAuth();
+  const { user } = useUser();
   const lastSyncedUserRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -25,11 +27,27 @@ export default function SyncBootstrapper() {
 
       lastSyncedUserRef.current = userId;
 
+      const getClerkToken = async (): Promise<string | null> => {
+        const token = await getToken({ template: 'supabase' });
+        return typeof token === 'string' ? token : null;
+      };
+
       try {
         console.log('SyncBootstrapper started');
 
-        await syncPendingConversations(userId, getToken);
-        await syncPendingMessages(userId, getToken);
+        const email = user?.primaryEmailAddress?.emailAddress;
+
+        if (email) {
+          await registerCurrentUserInDirectory({
+            clerkUserId: userId,
+            email,
+            displayName: user?.fullName ?? user?.username ?? null,
+            getClerkToken,
+          });
+        }
+
+        await syncPendingConversations(userId, getClerkToken);
+        await syncPendingMessages(userId, getClerkToken);
 
         console.log('SyncBootstrapper completed');
       } catch (error) {
@@ -38,7 +56,7 @@ export default function SyncBootstrapper() {
     }
 
     runInitialSync();
-  }, [isLoaded, userId, getToken]);
+  }, [isLoaded, userId, getToken, user]);
 
   return null;
 }

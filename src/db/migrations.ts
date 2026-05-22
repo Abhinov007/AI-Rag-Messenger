@@ -25,6 +25,65 @@ async function ensureColumn(
   }
 }
 
+async function getTableColumns(db: SQLiteDatabase, table: string) {
+  const rows = await db.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(${table});`,
+  );
+
+  return new Set(rows.map((row) => row.name));
+}
+
+/**
+ * Rebuilds the old phone-number contacts table into the new email-based table.
+ *
+ * This intentionally clears old phone contacts because the app is switching
+ * from phone-number contacts to email contacts.
+ */
+async function migrateContactsToEmailSchema(db: SQLiteDatabase) {
+  const contactColumns = await getTableColumns(db, 'contacts');
+
+  const hasOldPhoneSchema =
+    contactColumns.has('phone_number') ||
+    contactColumns.has('phone_number_normalized');
+
+  const hasEmailSchema =
+    contactColumns.has('email') && contactColumns.has('normalized_email');
+
+  if (hasOldPhoneSchema && !hasEmailSchema) {
+    await db.execAsync(`
+      DROP TABLE IF EXISTS contacts;
+    `);
+  }
+
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      clerk_user_id TEXT NOT NULL,
+      remote_id TEXT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      normalized_email TEXT NOT NULL,
+      synced INTEGER NOT NULL DEFAULT 0,
+      sync_error TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(clerk_user_id, normalized_email)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_contacts_clerk_user_id
+    ON contacts (clerk_user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_contacts_name
+    ON contacts (name);
+
+    CREATE INDEX IF NOT EXISTS idx_contacts_normalized_email
+    ON contacts (normalized_email);
+
+    CREATE INDEX IF NOT EXISTS idx_contacts_updated_at
+    ON contacts (updated_at);
+  `);
+}
+
 /**
  * Adds columns introduced after the first app release (no-op if present).
  */
@@ -48,6 +107,17 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
   await ensureColumn(
     db,
     'messages',
+    'synced',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  // Contact sync fields
+  await ensureColumn(db, 'contacts', 'clerk_user_id', 'TEXT');
+  await ensureColumn(db, 'contacts', 'remote_id', 'TEXT');
+  await ensureColumn(db, 'contacts', 'sync_error', 'TEXT');
+  await ensureColumn(
+    db,
+    'contacts',
     'synced',
     'INTEGER NOT NULL DEFAULT 0',
   );
@@ -84,18 +154,6 @@ export async function runMigrations(db: SQLiteDatabase) {
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
     );
 
-    CREATE TABLE IF NOT EXISTS contacts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      remote_id TEXT,
-      name TEXT NOT NULL,
-      phone_number TEXT NOT NULL,
-      phone_number_normalized TEXT NOT NULL UNIQUE,
-      synced INTEGER NOT NULL DEFAULT 0,
-      sync_error TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
     CREATE TABLE IF NOT EXISTS seed_history (
       seed_key TEXT PRIMARY KEY,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -109,13 +167,8 @@ export async function runMigrations(db: SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_created_at
     ON messages (created_at);
-
-    CREATE INDEX IF NOT EXISTS idx_contacts_name
-    ON contacts (name);
-
-    CREATE INDEX IF NOT EXISTS idx_contacts_updated_at
-    ON contacts (updated_at);
   `);
 
+  await migrateContactsToEmailSchema(db);
   await migrateLegacySchema(db);
 }

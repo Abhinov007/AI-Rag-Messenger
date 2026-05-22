@@ -7,16 +7,17 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ActivityIndicator, Text, View } from 'react-native';
+
 import { debugDatabaseHealthCheck } from './src/db/debugDatabase';
 import LoginScreen from './src/screens/LoginScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
 import ChatScreen from './src/screens/ChatScreen';
+import AddContactScreen from './src/screens/AddContactScreen';
 
 import type { AppStackParamList } from './src/navigation/types';
 import { env } from './src/config/env';
 import { initializeDatabase } from './src/db/database';
-import { syncPendingMessages } from './src/services/messageSync';
 import SyncBootstrapper from './src/components/SyncBootstrapper';
 
 export type AuthStackParamList = {
@@ -41,7 +42,10 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={env.clerkPublishableKey} tokenCache={tokenCache}>
+    <ClerkProvider
+      publishableKey={env.clerkPublishableKey}
+      tokenCache={tokenCache}
+    >
       <SyncBootstrapper />
       <AppContent />
     </ClerkProvider>
@@ -49,7 +53,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { isLoaded, isSignedIn, userId, getToken } = useAuth();
+  const { isLoaded, isSignedIn } = useAuth();
   const { signOut } = useClerk();
   const [isInitializingApp, setIsInitializingApp] = useState(true);
 
@@ -62,29 +66,9 @@ function AppContent() {
         setIsInitializingApp(false);
       }
     }
-  
+
     prepareApp();
   }, []);
-
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn || !userId) {
-      return;
-    }
-
-    const getClerkToken = async (): Promise<string | null> => {
-      const token = await getToken({ template: 'supabase' });
-
-      if (typeof token === 'string') {
-        return token;
-      }
-
-      return null;
-    };
-
-    syncPendingMessages(userId, getClerkToken).catch((error) => {
-      console.warn('Pending message sync failed:', error);
-    });
-  }, [isLoaded, isSignedIn, userId, getToken]);
 
   async function handleLogout() {
     await signOut();
@@ -108,10 +92,17 @@ function AppContent() {
               screenOptions={{ headerShown: false }}
             >
               <AppStack.Screen name="ChatList">
-                {() => <ChatListScreen onLogout={handleLogout} />}
+                {(props) => (
+                  <ChatListScreen {...props} onLogout={handleLogout} />
+                )}
               </AppStack.Screen>
 
               <AppStack.Screen name="Chat" component={ChatScreen} />
+
+              <AppStack.Screen
+                name="AddContact"
+                component={AddContactScreen}
+              />
             </AppStack.Navigator>
           ) : (
             <AuthStack.Navigator screenOptions={{ headerShown: false }}>

@@ -19,6 +19,7 @@ import {
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
 import ConversationItem from '../components/ConversationItem';
 import { listConversations } from '../db/conversationRepository';
 import type { AppStackParamList } from '../navigation/types';
@@ -33,11 +34,14 @@ type Props = {
  */
 export default function ChatListScreen({ onLogout }: Props) {
   const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
+
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+
   const filteredConversations = conversations.filter((conversation) => {
     if (!normalizedSearchQuery) {
       return true;
@@ -57,6 +61,7 @@ export default function ChatListScreen({ onLogout }: Props) {
   const handleOpenConversation = useCallback(
     (conversation: ConversationListItem) => {
       Keyboard.dismiss();
+
       navigation.navigate('Chat', {
         conversationId: conversation.id,
         title: conversation.title,
@@ -64,6 +69,11 @@ export default function ChatListScreen({ onLogout }: Props) {
     },
     [navigation],
   );
+
+  const handleAddContact = useCallback(() => {
+    Keyboard.dismiss();
+    navigation.navigate('AddContact');
+  }, [navigation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -73,6 +83,7 @@ export default function ChatListScreen({ onLogout }: Props) {
         if (isFirstListFocus.current) {
           setIsLoading(true);
         }
+
         try {
           const rows = await listConversations();
 
@@ -132,6 +143,19 @@ export default function ChatListScreen({ onLogout }: Props) {
         />
       </View>
 
+      <View style={styles.actionsWrap}>
+        <Pressable
+          onPress={handleAddContact}
+          style={({ pressed }) => [
+            styles.addContactButton,
+            pressed && styles.addContactButtonPressed,
+          ]}
+        >
+          <Text style={styles.addContactIcon}>+</Text>
+          <Text style={styles.addContactText}>Add Contact</Text>
+        </Pressable>
+      </View>
+
       <FlatList
         contentContainerStyle={styles.listContent}
         data={filteredConversations}
@@ -146,7 +170,7 @@ export default function ChatListScreen({ onLogout }: Props) {
         ListEmptyComponent={
           <View style={styles.emptyState}>
             {isLoading ? (
-              <ActivityIndicator color="#25D366" />
+              <ActivityIndicator color="#22C55E" />
             ) : (
               <>
                 <Text style={styles.emptyTitle}>
@@ -158,7 +182,7 @@ export default function ChatListScreen({ onLogout }: Props) {
                 <Text style={styles.emptyText}>
                   {normalizedSearchQuery
                     ? 'Try searching by conversation name or last message.'
-                    : 'New chats will appear here after they are created.'}
+                    : 'Tap Add Contact to save an email and start a new chat.'}
                 </Text>
               </>
             )}
@@ -183,7 +207,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   kicker: {
-    color: '#25D366',
+    color: '#22C55E',
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
@@ -222,6 +246,36 @@ const styles = StyleSheet.create({
     fontSize: 15,
     minHeight: 48,
     paddingHorizontal: 14,
+  },
+  actionsWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  addContactButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#22C55E',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  addContactButtonPressed: {
+    backgroundColor: '#16A34A',
+    opacity: 0.9,
+  },
+  addContactIcon: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '900',
+    lineHeight: 22,
+  },
+  addContactText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
   },
   listContent: {
     paddingHorizontal: 16,
