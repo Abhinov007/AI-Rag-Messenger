@@ -73,18 +73,19 @@ export async function createConversation(
 
   const result = await db.runAsync(
     `
-    INSERT INTO conversations
-    (
-      title,
-      owner_clerk_user_id,
-      contact_name,
-      contact_email,
-      contact_normalized_email,
-      contact_clerk_user_id,
-      synced,
-      sync_error
-    )
-    VALUES (?, ?, ?, ?, ?, ?, 0, NULL);
+INSERT INTO conversations
+(
+  title,
+  owner_clerk_user_id,
+  contact_name,
+  contact_email,
+  contact_normalized_email,
+  contact_clerk_user_id,
+  participant_key,
+  synced,
+  sync_error
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL);
     `,
     [
       conversation.title?.trim() || null,
@@ -93,6 +94,7 @@ export async function createConversation(
       conversation.contactEmail?.trim() || null,
       conversation.contactNormalizedEmail?.trim().toLowerCase() || null,
       conversation.contactClerkUserId || null,
+      conversation.participantKey || null,
     ],
   );
 

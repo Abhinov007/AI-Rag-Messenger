@@ -14,15 +14,21 @@ export type Conversation = {
   contactEmail?: string | null;
   contactNormalizedEmail?: string | null;
   contactClerkUserId?: string | null;
+
+  participantKey?: string | null;
 };
 
 export type ConversationCreateInput = {
   title: string | null;
+
   ownerClerkUserId?: string | null;
+
   contactName?: string | null;
   contactEmail?: string | null;
   contactNormalizedEmail?: string | null;
   contactClerkUserId?: string | null;
+
+  participantKey?: string | null;
 };
 
 export type ConversationListItem = Conversation & {

@@ -9,10 +9,11 @@ import {
 } from '../db/contactsRepository';
 import {
   createConversation,
-  getConversationByContactEmail,
+  getConversationBetweenUsers,
 } from '../db/conversationRepository';
 import { syncPendingConversations } from '../services/conversationSync';
 import { findAppUserByEmail, normalizeEmail } from '../services/userDirectory';
+import { createParticipantKey } from '../utils/participants';
 
 export default function AddContactScreen({ navigation }: any) {
   const { userId, getToken } = useAuth();
@@ -82,9 +83,14 @@ export default function AddContactScreen({ navigation }: any) {
         return;
       }
 
-      const existingConversation = await getConversationByContactEmail(
+      const participantKey = createParticipantKey(
         userId,
-        existingUser.normalized_email,
+        existingUser.clerk_user_id,
+      );
+
+      const existingConversation = await getConversationBetweenUsers(
+        userId,
+        existingUser.clerk_user_id,
       );
 
       if (existingConversation) {
@@ -115,6 +121,7 @@ export default function AddContactScreen({ navigation }: any) {
         contactEmail: existingUser.email,
         contactNormalizedEmail: existingUser.normalized_email,
         contactClerkUserId: existingUser.clerk_user_id,
+        participantKey
       });
 
       await syncPendingConversations(userId, getClerkToken);

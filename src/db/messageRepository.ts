@@ -223,7 +223,6 @@ export async function deleteMessage(messageId: number) {
 }
 
 
-
 export async function upsertRemoteMessageLocally({
   conversationId,
   remoteId,
@@ -241,7 +240,41 @@ export async function upsertRemoteMessageLocally({
 }) {
   const db = await getDatabase();
 
-  await db.runAsync(
+  const existing = await db.getFirstAsync<{ id: number }>(
+    `
+    SELECT id
+    FROM messages
+    WHERE remote_id = ?
+    LIMIT 1;
+    `,
+    [remoteId],
+  );
+
+  if (existing?.id) {
+    await db.runAsync(
+      `
+      UPDATE messages
+      SET conversation_id = ?,
+          sender_type = ?,
+          body = ?,
+          summary = ?,
+          synced = 1,
+          sync_error = NULL
+      WHERE id = ?;
+      `,
+      [
+        conversationId,
+        senderType,
+        body,
+        summary ?? null,
+        existing.id,
+      ],
+    );
+
+    return existing.id;
+  }
+
+  const result = await db.runAsync(
     `
     INSERT INTO messages
     (
@@ -254,13 +287,7 @@ export async function upsertRemoteMessageLocally({
       sync_error,
       created_at
     )
-    VALUES (?, ?, ?, ?, ?, 1, NULL, ?)
-    ON CONFLICT(remote_id)
-    DO UPDATE SET
-      body = excluded.body,
-      summary = excluded.summary,
-      synced = 1,
-      sync_error = NULL;
+    VALUES (?, ?, ?, ?, ?, 1, NULL, ?);
     `,
     [
       conversationId,
@@ -271,4 +298,6 @@ export async function upsertRemoteMessageLocally({
       createdAt,
     ],
   );
+
+  return Number(result.lastInsertRowId);
 }

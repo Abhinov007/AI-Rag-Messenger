@@ -35,9 +35,6 @@ async function getTableColumns(db: SQLiteDatabase, table: string) {
 
 /**
  * Rebuilds the old phone-number contacts table into the new email-based table.
- *
- * This intentionally clears old phone contacts because the app is switching
- * from phone-number contacts to email contacts.
  */
 async function migrateContactsToEmailSchema(db: SQLiteDatabase) {
   const contactColumns = await getTableColumns(db, 'contacts');
@@ -85,7 +82,7 @@ async function migrateContactsToEmailSchema(db: SQLiteDatabase) {
 }
 
 /**
- * Adds columns introduced after the first app release (no-op if present).
+ * Adds columns introduced after the first app release.
  */
 async function migrateLegacySchema(db: SQLiteDatabase) {
   await ensureColumn(db, 'conversations', 'last_message', 'TEXT');
@@ -111,6 +108,9 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
     'TEXT',
   );
   await ensureColumn(db, 'conversations', 'contact_clerk_user_id', 'TEXT');
+
+  // Shared conversation key for both participants
+  await ensureColumn(db, 'conversations', 'participant_key', 'TEXT');
 
   // Message sync fields
   await ensureColumn(db, 'messages', 'summary', 'TEXT');
@@ -141,18 +141,34 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
 async function createPostMigrationIndexes(db: SQLiteDatabase) {
   await db.execAsync(`
     DROP INDEX IF EXISTS idx_conversations_contact_email;
+    DROP INDEX IF EXISTS idx_messages_remote_id;
+
+    DELETE FROM messages
+    WHERE remote_id IS NOT NULL
+      AND id NOT IN (
+        SELECT MIN(id)
+        FROM messages
+        WHERE remote_id IS NOT NULL
+        GROUP BY remote_id
+      );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_owner_contact_email
     ON conversations (owner_clerk_user_id, contact_normalized_email)
     WHERE owner_clerk_user_id IS NOT NULL
       AND contact_normalized_email IS NOT NULL;
 
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_participant_key
+    ON conversations (participant_key)
+    WHERE participant_key IS NOT NULL;
+
     CREATE INDEX IF NOT EXISTS idx_conversations_owner
     ON conversations (owner_clerk_user_id);
 
+    CREATE INDEX IF NOT EXISTS idx_conversations_contact_user
+    ON conversations (contact_clerk_user_id);
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_remote_id
-    ON messages (remote_id)
-    WHERE remote_id IS NOT NULL;
+    ON messages (remote_id);
   `);
 }
 
@@ -177,6 +193,7 @@ export async function runMigrations(db: SQLiteDatabase) {
       contact_email TEXT,
       contact_normalized_email TEXT,
       contact_clerk_user_id TEXT,
+      participant_key TEXT,
 
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
