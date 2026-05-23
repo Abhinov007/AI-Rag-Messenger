@@ -33,20 +33,17 @@ export async function registerCurrentUserInDirectory({
 
   const normalizedEmail = normalizeEmail(email);
 
-  const { error } = await supabase
-    .from('app_users')
-    .upsert(
-      {
-        clerk_user_id: clerkUserId,
-        email,
-        normalized_email: normalizedEmail,
-        display_name: displayName ?? null,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: 'clerk_user_id',
-      },
-    );
+  const payload = {
+    clerk_user_id: clerkUserId,
+    email,
+    normalized_email: normalizedEmail,
+    display_name: displayName ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from('app_users').upsert(payload, {
+    onConflict: 'normalized_email',
+  });
 
   if (error) {
     console.warn('Failed to register app user:', error.message);

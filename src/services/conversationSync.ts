@@ -12,6 +12,17 @@ type RemoteConversationRow = {
   id: string;
 };
 
+function buildParticipantKey(
+  ownerClerkUserId?: string | null,
+  contactClerkUserId?: string | null,
+) {
+  if (!ownerClerkUserId || !contactClerkUserId) {
+    return null;
+  }
+
+  return [ownerClerkUserId, contactClerkUserId].sort().join('__');
+}
+
 export async function syncPendingConversations(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
@@ -47,17 +58,24 @@ async function pushConversationToSupabase(
     return;
   }
 
-  if (!conversation.participantKey) {
+  const ownerClerkUserId = conversation.ownerClerkUserId ?? clerkUserId;
+  const contactClerkUserId = conversation.contactClerkUserId ?? null;
+
+  const participantKey =
+    conversation.participantKey ||
+    buildParticipantKey(ownerClerkUserId, contactClerkUserId);
+
+  if (!participantKey) {
     await markConversationSyncFailed(
       conversation.id,
-      'Conversation is missing participantKey.',
+      'Conversation is missing participantKey and participant IDs.',
     );
 
-    console.warn('Supabase conversation sync skipped: missing participantKey.', {
+    console.warn('Supabase conversation sync skipped: missing participant data.', {
       localId: conversation.id,
       title: conversation.title,
-      ownerClerkUserId: conversation.ownerClerkUserId,
-      contactClerkUserId: conversation.contactClerkUserId,
+      ownerClerkUserId,
+      contactClerkUserId,
     });
 
     return;
@@ -67,9 +85,9 @@ async function pushConversationToSupabase(
     localId: conversation.id,
     title: conversation.title,
     clerkUserId,
-    participantKey: conversation.participantKey,
-    ownerClerkUserId: conversation.ownerClerkUserId,
-    contactClerkUserId: conversation.contactClerkUserId,
+    participantKey,
+    ownerClerkUserId,
+    contactClerkUserId,
   });
 
   const payload = {
@@ -78,13 +96,13 @@ async function pushConversationToSupabase(
 
     title: conversation.title ?? 'New Chat',
 
-    owner_clerk_user_id: conversation.ownerClerkUserId ?? clerkUserId,
-    contact_clerk_user_id: conversation.contactClerkUserId ?? null,
+    owner_clerk_user_id: ownerClerkUserId,
+    contact_clerk_user_id: contactClerkUserId,
     contact_name: conversation.contactName ?? conversation.title ?? null,
     contact_email: conversation.contactEmail ?? null,
     contact_normalized_email: conversation.contactNormalizedEmail ?? null,
 
-    participant_key: conversation.participantKey,
+    participant_key: participantKey,
 
     created_at: conversation.createdAt,
     updated_at: conversation.updatedAt,
@@ -112,7 +130,7 @@ async function pushConversationToSupabase(
       const { data: existingRow, error: fetchError } = await supabase
         .from('conversations')
         .select('id')
-        .eq('participant_key', conversation.participantKey)
+        .eq('participant_key', participantKey)
         .maybeSingle<RemoteConversationRow>();
 
       if (fetchError) {
@@ -135,7 +153,7 @@ async function pushConversationToSupabase(
         console.log('Recovered duplicate Supabase conversation:', {
           localId: conversation.id,
           remoteId: existingRow.id,
-          participantKey: conversation.participantKey,
+          participantKey,
         });
 
         return;
@@ -155,7 +173,7 @@ async function pushConversationToSupabase(
     console.log('Supabase conversation synced:', {
       localId: conversation.id,
       remoteId: data.id,
-      participantKey: conversation.participantKey,
+      participantKey,
     });
   }
 }

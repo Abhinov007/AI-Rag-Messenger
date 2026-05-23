@@ -20,8 +20,10 @@ type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
 
 export default function LoginScreen({ navigation }: Props) {
   const { isLoaded, signIn, setActive } = useSignIn();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -37,17 +39,35 @@ export default function LoginScreen({ navigation }: Props) {
 
     setError('');
     setIsSubmitting(true);
+
     try {
       const result = await signIn.create({
         identifier: email.trim(),
         password,
       });
 
+      console.log('Clerk sign in result:', {
+        status: result.status,
+        supportedSecondFactors: (result as any).supportedSecondFactors,
+        supportedFirstFactors: (result as any).supportedFirstFactors,
+      });
+
       if (result.status === 'complete') {
         await setActive({ session: result.createdSessionId });
-      } else {
-        setError('Additional verification is required for this account.');
+        return;
       }
+
+      if (
+        result.status === 'needs_second_factor' ||
+        result.status === 'needs_client_trust'
+      ) {
+        setError(
+          `Clerk is requesting additional verification. Status: ${result.status}. Since MFA is disabled in Clerk Dashboard, recreate this test user or check this user's security settings in Clerk.`,
+        );
+        return;
+      }
+
+      setError(`Login incomplete. Clerk status: ${result.status}`);
     } catch (err) {
       setError(getClerkErrorMessage(err));
     } finally {
@@ -58,6 +78,7 @@ export default function LoginScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardView}
@@ -73,6 +94,7 @@ export default function LoginScreen({ navigation }: Props) {
             </View>
 
             <Text style={styles.title}>Welcome back</Text>
+
             <Text style={styles.subtitle}>
               Sign in to continue your AI-powered messaging workspace.
             </Text>
@@ -80,6 +102,7 @@ export default function LoginScreen({ navigation }: Props) {
             <View style={styles.form}>
               <TextInput
                 autoCapitalize="none"
+                autoCorrect={false}
                 keyboardType="email-address"
                 onChangeText={setEmail}
                 placeholder="Email"
@@ -87,6 +110,7 @@ export default function LoginScreen({ navigation }: Props) {
                 style={styles.input}
                 value={email}
               />
+
               <TextInput
                 onChangeText={setPassword}
                 placeholder="Password"
@@ -138,8 +162,14 @@ function getClerkErrorMessage(err: unknown) {
     'errors' in err &&
     Array.isArray((err as { errors?: unknown }).errors)
   ) {
-    const [firstError] = (err as { errors: Array<{ message?: string }> }).errors;
+    const [firstError] = (err as { errors: Array<{ message?: string }> })
+      .errors;
+
     return firstError?.message ?? 'Unable to sign in.';
+  }
+
+  if (err instanceof Error) {
+    return err.message;
   }
 
   return 'Unable to sign in.';

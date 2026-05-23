@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useAuth, useUser } from '@clerk/expo';
+
 import { syncPendingConversations } from '../services/conversationSync';
 import { syncPendingMessages } from '../services/messageSync';
 import { registerCurrentUserInDirectory } from '../services/userDirectory';
@@ -7,17 +8,39 @@ import { pullRemoteConversations } from '../services/conversationPull';
 
 export default function SyncBootstrapper() {
   const { userId, getToken, isLoaded } = useAuth();
-  const { user } = useUser();
+  const { user, isLoaded: isUserLoaded } = useUser();
+
   const lastSyncedUserRef = useRef<string | null>(null);
+
+  const primaryEmail = user?.primaryEmailAddress?.emailAddress ?? null;
+
+  const displayName = useMemo(() => {
+    if (user?.fullName?.trim()) {
+      return user.fullName.trim();
+    }
+
+    if (user?.username?.trim()) {
+      return user.username.trim();
+    }
+
+    if (primaryEmail) {
+      return primaryEmail.split('@')[0];
+    }
+
+    return 'User';
+  }, [user?.fullName, user?.username, primaryEmail]);
 
   useEffect(() => {
     async function runInitialSync() {
       console.log('SyncBootstrapper check:', {
         isLoaded,
+        isUserLoaded,
         userId,
+        primaryEmail,
+        displayName,
       });
 
-      if (!isLoaded || !userId) {
+      if (!isLoaded || !isUserLoaded || !userId) {
         return;
       }
 
@@ -36,20 +59,20 @@ export default function SyncBootstrapper() {
       try {
         console.log('SyncBootstrapper started');
 
-        const email = user?.primaryEmailAddress?.emailAddress;
-
-        if (email) {
+        if (primaryEmail) {
           await registerCurrentUserInDirectory({
             clerkUserId: userId,
-            email,
-            displayName: user?.fullName ?? user?.username ?? null,
+            email: primaryEmail,
+            displayName,
             getClerkToken,
           });
+        } else {
+          console.warn('User directory registration skipped: missing email.');
         }
 
         await syncPendingConversations(userId, getClerkToken);
         await pullRemoteConversations(userId, getClerkToken);
-        await syncPendingMessages(userId, getClerkToken);   
+        await syncPendingMessages(userId, getClerkToken);
 
         console.log('SyncBootstrapper completed');
       } catch (error) {
@@ -58,7 +81,14 @@ export default function SyncBootstrapper() {
     }
 
     runInitialSync();
-  }, [isLoaded, userId, getToken, user]);
+  }, [
+    isLoaded,
+    isUserLoaded,
+    userId,
+    getToken,
+    primaryEmail,
+    displayName,
+  ]);
 
   return null;
 }

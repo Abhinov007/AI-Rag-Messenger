@@ -5,7 +5,7 @@
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '@clerk/expo';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -48,17 +48,14 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
 
-  const getClerkToken = useCallback(async (): Promise<string | null> => {
+  const subscriptionKeyRef = useRef<string | null>(null);
+
+  async function getClerkToken(): Promise<string | null> {
     const token = await getToken({ template: 'supabase' });
+    return typeof token === 'string' ? token : null;
+  }
 
-    if (typeof token === 'string') {
-      return token;
-    }
-
-    return null;
-  }, [getToken]);
-
-  const loadThread = useCallback(async () => {
+  async function loadThread() {
     const conversation = await getConversationById(conversationId);
 
     if (!conversation) {
@@ -73,8 +70,14 @@ export default function ChatScreen({ navigation, route }: Props) {
     const rows = await getMessagesByConversationId(conversationId);
     setMessages(rows);
 
+    console.log('Local messages loaded:', {
+      conversationId,
+      count: rows.length,
+      latest: rows.at(-1)?.body ?? null,
+    });
+
     return conversation;
-  }, [conversationId]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -94,9 +97,17 @@ export default function ChatScreen({ navigation, route }: Props) {
           console.log('Remote message setup skipped: no remote conversation id.', {
             localConversationId: conversationId,
           });
-
           return;
         }
+
+        console.log('Chat remote setup:', {
+          currentUserId: userId,
+          localConversationId: conversationId,
+          remoteConversationId: conversation.remoteId,
+          title: conversation.title,
+          ownerClerkUserId: conversation.ownerClerkUserId,
+          contactClerkUserId: conversation.contactClerkUserId,
+        });
 
         await pullRemoteMessagesForConversation({
           localConversationId: conversationId,
@@ -104,9 +115,26 @@ export default function ChatScreen({ navigation, route }: Props) {
           getClerkToken,
         });
 
-        if (!cancelled) {
-          await loadThread();
+        if (cancelled) {
+          return;
         }
+
+        await loadThread();
+
+        if (cancelled) {
+          return;
+        }
+
+        const subscriptionKey = `${conversationId}:${conversation.remoteId}:${userId}`;
+
+        if (subscriptionKeyRef.current === subscriptionKey) {
+          console.log('Realtime skipped: already subscribed.', {
+            subscriptionKey,
+          });
+          return;
+        }
+
+        subscriptionKeyRef.current = subscriptionKey;
 
         channel = subscribeToConversationMessages({
           localConversationId: conversationId,
@@ -136,12 +164,13 @@ export default function ChatScreen({ navigation, route }: Props) {
 
     return () => {
       cancelled = true;
+      subscriptionKeyRef.current = null;
 
       if (channel) {
         channel.unsubscribe();
       }
     };
-  }, [conversationId, userId, getClerkToken, loadThread]);
+  }, [conversationId, userId]);
 
   async function handleSend() {
     const text = draft.trim();
@@ -155,6 +184,12 @@ export default function ChatScreen({ navigation, route }: Props) {
 
     try {
       const messageId = await addMessage(conversationId, 'user', text);
+
+      console.log('Local message created:', {
+        conversationId,
+        messageId,
+        body: text,
+      });
 
       if (userId) {
         await syncMessageById(messageId, userId, getClerkToken);
@@ -206,6 +241,7 @@ export default function ChatScreen({ navigation, route }: Props) {
           <FlatList
             contentContainerStyle={styles.listContent}
             data={messages}
+            extraData={messages.length}
             keyExtractor={(item) => String(item.id)}
             renderItem={({ item }) => {
               const isUserMessage = item.senderType === 'user';
@@ -230,7 +266,7 @@ export default function ChatScreen({ navigation, route }: Props) {
                         ? 'You'
                         : item.senderType === 'assistant'
                           ? 'Assistant'
-                          : 'Contact'}
+                          : 'System'}
                     </Text>
 
                     <Text style={styles.bubbleBody}>{item.body}</Text>
@@ -252,7 +288,7 @@ export default function ChatScreen({ navigation, route }: Props) {
 
         <View style={styles.composer}>
           <TextInput
-            editable={!isLoading && !error}
+            editable={!isLoading && !Boolean(error)}
             multiline
             onChangeText={setDraft}
             placeholder="Message"
