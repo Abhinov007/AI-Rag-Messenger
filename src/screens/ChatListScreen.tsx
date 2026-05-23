@@ -25,6 +25,7 @@ import ProfileSummary from '../components/ProfileSummary';
 import ConversationItem from '../components/ConversationItem';
 import { listConversations } from '../db/conversationRepository';
 import type { AppStackParamList } from '../navigation/types';
+import { pullRemoteConversations } from '../services/conversationPull';
 import type { ConversationListItem } from '../types/conversation';
 
 type Props = {
@@ -33,12 +34,19 @@ type Props = {
 
 export default function ChatListScreen({ onLogout }: Props) {
   const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
-  const { userId } = useAuth();
+  const { userId, getToken } = useAuth();
 
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const isFirstListFocus = useRef(true);
+
+  const getClerkToken = useCallback(async (): Promise<string | null> => {
+    const token = await getToken({ template: 'supabase' });
+    return typeof token === 'string' ? token : null;
+  }, [getToken]);
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
@@ -57,8 +65,6 @@ export default function ChatListScreen({ onLogout }: Props) {
       contactEmail.includes(normalizedSearchQuery)
     );
   });
-
-  const isFirstListFocus = useRef(true);
 
   const handleOpenConversation = useCallback(
     (conversation: ConversationListItem) => {
@@ -96,7 +102,30 @@ export default function ChatListScreen({ onLogout }: Props) {
             return;
           }
 
+          try {
+            await pullRemoteConversations(userId, getClerkToken);
+          } catch (pullError) {
+            console.warn(
+              'Remote conversation pull failed but local list will still load:',
+              pullError,
+            );
+          }
+
           const rows = await listConversations(userId);
+
+          console.log('ChatList conversations loaded:', {
+            userId,
+            count: rows.length,
+            rows: rows.map((row) => ({
+              id: row.id,
+              title: row.title,
+              remoteId: row.remoteId,
+              ownerClerkUserId: row.ownerClerkUserId,
+              contactClerkUserId: row.contactClerkUserId,
+              contactEmail: row.contactEmail,
+              lastMessage: row.lastMessage,
+            })),
+          });
 
           if (isMounted) {
             setConversations(rows);
@@ -121,7 +150,7 @@ export default function ChatListScreen({ onLogout }: Props) {
       return () => {
         isMounted = false;
       };
-    }, [userId]),
+    }, [userId, getClerkToken]),
   );
 
   return (
