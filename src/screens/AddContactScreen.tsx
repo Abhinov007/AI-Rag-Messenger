@@ -133,7 +133,7 @@ export default function AddContactScreen({ navigation }: any) {
         hint: error?.hint,
         fullError: error,
       });
-    
+
       Alert.alert(
         'Error',
         error?.message || 'Could not check or add this user.',

@@ -21,6 +21,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import ProfileSummary from '../components/ProfileSummary';
 import ConversationItem from '../components/ConversationItem';
 import { listConversations } from '../db/conversationRepository';
 import type { AppStackParamList } from '../navigation/types';
@@ -30,9 +31,6 @@ type Props = {
   onLogout: () => void;
 };
 
-/**
- * Displays locally stored conversations and exposes a temporary logout action.
- */
 export default function ChatListScreen({ onLogout }: Props) {
   const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
   const { userId } = useAuth();
@@ -146,6 +144,8 @@ export default function ChatListScreen({ onLogout }: Props) {
           <Text style={styles.logoutText}>Logout</Text>
         </Pressable>
       </View>
+
+      <ProfileSummary />
 
       <View style={styles.searchWrap}>
         <TextInput

@@ -11,9 +11,6 @@ import type {
   ConversationListItem,
 } from '../types/conversation';
 
-/**
- * Raw row shape returned by SQLite for the `conversations` table.
- */
 type ConversationRow = {
   id: number;
   title: string | null;
@@ -32,18 +29,12 @@ type ConversationRow = {
   contact_clerk_user_id: string | null;
 };
 
-/**
- * Raw row shape returned by the chat-list query.
- */
 type ConversationListRow = ConversationRow & {
   last_message: string | null;
   last_message_at: string | null;
   message_count: number;
 };
 
-/**
- * Converts snake_case SQLite columns into the camelCase app type.
- */
 function mapConversation(row: ConversationRow): Conversation {
   return {
     id: row.id,
@@ -64,9 +55,6 @@ function mapConversation(row: ConversationRow): Conversation {
   };
 }
 
-/**
- * Converts the enriched list query into the UI-friendly conversation item.
- */
 function mapConversationListItem(
   row: ConversationListRow,
 ): ConversationListItem {
@@ -78,9 +66,6 @@ function mapConversationListItem(
   };
 }
 
-/**
- * Creates a new conversation and returns its database id.
- */
 export async function createConversation(
   conversation: ConversationCreateInput,
 ): Promise<number> {
@@ -114,14 +99,8 @@ export async function createConversation(
   return Number(result.lastInsertRowId);
 }
 
-/**
- * Returns conversations owned by the logged-in Clerk user.
- *
- * This intentionally hides dummy seed conversations because those rows do not
- * have owner_clerk_user_id/contact_normalized_email.
- */
 export async function getConversations(
-  ownerClerkUserId: string,
+  currentClerkUserId: string,
 ): Promise<ConversationListItem[]> {
   const db = await getDatabase();
 
@@ -154,27 +133,26 @@ export async function getConversations(
         ORDER BY datetime(created_at) DESC, id DESC
         LIMIT 1
       )
-    WHERE conversations.owner_clerk_user_id = ?
-      AND conversations.contact_normalized_email IS NOT NULL
+    WHERE (
+      conversations.owner_clerk_user_id = ?
+      OR conversations.contact_clerk_user_id = ?
+    )
+    AND conversations.contact_normalized_email IS NOT NULL
     GROUP BY conversations.id
     ORDER BY datetime(conversations.updated_at) DESC, conversations.id DESC;
     `,
-    [ownerClerkUserId],
+    [currentClerkUserId, currentClerkUserId],
   );
 
   return rows.map(mapConversationListItem);
 }
 
-/** @deprecated Prefer `getConversations`. */
 export async function listConversations(
-  ownerClerkUserId: string,
+  currentClerkUserId: string,
 ): Promise<ConversationListItem[]> {
-  return getConversations(ownerClerkUserId);
+  return getConversations(currentClerkUserId);
 }
 
-/**
- * Looks up one conversation by id.
- */
 export async function getConversationById(
   id: number,
 ): Promise<Conversation | null> {
@@ -204,11 +182,6 @@ export async function getConversationById(
   return row ? mapConversation(row) : null;
 }
 
-/**
- * Finds an existing contact-linked conversation by owner + normalized email.
- *
- * Used to prevent duplicate chats when the same contact is added again.
- */
 export async function getConversationByContactEmail(
   ownerClerkUserId: string,
   normalizedEmail: string,
@@ -241,16 +214,55 @@ export async function getConversationByContactEmail(
   return row ? mapConversation(row) : null;
 }
 
-/** @deprecated Prefer `getConversationById`. */
+export async function getConversationBetweenUsers(
+  currentClerkUserId: string,
+  otherClerkUserId: string,
+): Promise<Conversation | null> {
+  const db = await getDatabase();
+
+  const row = await db.getFirstAsync<ConversationRow>(
+    `
+    SELECT
+      id,
+      title,
+      created_at,
+      updated_at,
+      remote_id,
+      synced,
+      sync_error,
+      owner_clerk_user_id,
+      contact_name,
+      contact_email,
+      contact_normalized_email,
+      contact_clerk_user_id
+    FROM conversations
+    WHERE (
+      owner_clerk_user_id = ?
+      AND contact_clerk_user_id = ?
+    )
+    OR (
+      owner_clerk_user_id = ?
+      AND contact_clerk_user_id = ?
+    )
+    LIMIT 1;
+    `,
+    [
+      currentClerkUserId,
+      otherClerkUserId,
+      otherClerkUserId,
+      currentClerkUserId,
+    ],
+  );
+
+  return row ? mapConversation(row) : null;
+}
+
 export async function getConversation(
   conversationId: number,
 ): Promise<Conversation | null> {
   return getConversationById(conversationId);
 }
 
-/**
- * Returns all conversations that still need to be pushed to Supabase.
- */
 export async function getUnsyncedConversations(): Promise<Conversation[]> {
   const db = await getDatabase();
 
@@ -276,9 +288,6 @@ export async function getUnsyncedConversations(): Promise<Conversation[]> {
   return rows.map(mapConversation);
 }
 
-/**
- * Marks a local conversation as synced after Supabase returns the remote UUID.
- */
 export async function markConversationSyncedWithRemoteId(
   conversationId: number,
   remoteId: string,
@@ -297,9 +306,6 @@ export async function markConversationSyncedWithRemoteId(
   );
 }
 
-/**
- * Stores the latest sync error for a conversation.
- */
 export async function markConversationSyncFailed(
   conversationId: number,
   error: string,
@@ -317,10 +323,6 @@ export async function markConversationSyncFailed(
   );
 }
 
-/**
- * Updates the denormalized last-message preview and bumps `updated_at` so the
- * chat list reflects recent activity even before a new `messages` row exists.
- */
 export async function updateConversationLastMessage(
   conversationId: number,
   lastMessage: string,
@@ -339,9 +341,6 @@ export async function updateConversationLastMessage(
   );
 }
 
-/**
- * Updates a conversation title and refreshes its `updated_at` timestamp.
- */
 export async function renameConversation(
   conversationId: number,
   title: string,
@@ -360,12 +359,26 @@ export async function renameConversation(
   );
 }
 
-/**
- * Deletes a conversation. Related messages are removed by the foreign key's
- * `ON DELETE CASCADE` rule.
- */
 export async function deleteConversation(conversationId: number) {
   const db = await getDatabase();
 
   await db.runAsync('DELETE FROM conversations WHERE id = ?;', [conversationId]);
+}
+
+export async function debugConversationOwners() {
+  const db = await getDatabase();
+
+  const rows = await db.getAllAsync(`
+    SELECT
+      id,
+      title,
+      owner_clerk_user_id,
+      contact_clerk_user_id,
+      contact_email,
+      contact_normalized_email
+    FROM conversations
+    ORDER BY id DESC;
+  `);
+
+  console.log('Conversation ownership debug:', rows);
 }
