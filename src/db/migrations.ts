@@ -149,6 +149,10 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_conversations_owner
     ON conversations (owner_clerk_user_id);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_remote_id
+    ON messages (remote_id)
+    WHERE remote_id IS NOT NULL;
   `);
 }
 

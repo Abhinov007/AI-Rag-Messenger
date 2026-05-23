@@ -8,6 +8,7 @@ import type {
   MessageSenderType,
 } from '../types/message';
 
+
 /**
  * Raw row shape returned by SQLite for the `messages` table.
  */
@@ -219,4 +220,55 @@ export async function markMessageSyncFailed(
 export async function deleteMessage(messageId: number) {
   const db = await getDatabase();
   await db.runAsync('DELETE FROM messages WHERE id = ?;', messageId);
+}
+
+
+
+export async function upsertRemoteMessageLocally({
+  conversationId,
+  remoteId,
+  senderType,
+  body,
+  summary,
+  createdAt,
+}: {
+  conversationId: number;
+  remoteId: string;
+  senderType: MessageSenderType;
+  body: string;
+  summary?: string | null;
+  createdAt: string;
+}) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    INSERT INTO messages
+    (
+      conversation_id,
+      sender_type,
+      body,
+      summary,
+      remote_id,
+      synced,
+      sync_error,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, 1, NULL, ?)
+    ON CONFLICT(remote_id)
+    DO UPDATE SET
+      body = excluded.body,
+      summary = excluded.summary,
+      synced = 1,
+      sync_error = NULL;
+    `,
+    [
+      conversationId,
+      senderType,
+      body,
+      summary ?? null,
+      remoteId,
+      createdAt,
+    ],
+  );
 }

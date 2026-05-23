@@ -53,7 +53,15 @@ async function pushConversationToSupabase(
   const payload = {
     clerk_user_id: clerkUserId,
     local_id: conversation.id,
+  
     title: conversation.title ?? 'New Chat',
+  
+    owner_clerk_user_id: conversation.ownerClerkUserId ?? clerkUserId,
+    contact_clerk_user_id: conversation.contactClerkUserId ?? null,
+    contact_name: conversation.contactName ?? conversation.title ?? null,
+    contact_email: conversation.contactEmail ?? null,
+    contact_normalized_email: conversation.contactNormalizedEmail ?? null,
+  
     created_at: conversation.createdAt,
     updated_at: conversation.updatedAt,
   };

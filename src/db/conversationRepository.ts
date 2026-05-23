@@ -382,3 +382,154 @@ export async function debugConversationOwners() {
 
   console.log('Conversation ownership debug:', rows);
 }
+
+export async function upsertPulledConversation({
+  remoteId,
+  title,
+  ownerClerkUserId,
+  contactName,
+  contactEmail,
+  contactNormalizedEmail,
+  contactClerkUserId,
+  createdAt,
+  updatedAt,
+}: {
+  remoteId: string;
+  title: string | null;
+  ownerClerkUserId: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactNormalizedEmail: string | null;
+  contactClerkUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  const db = await getDatabase();
+
+  const existingByRemoteId = await db.getFirstAsync<{ id: number }>(
+    `
+    SELECT id
+    FROM conversations
+    WHERE remote_id = ?
+    LIMIT 1;
+    `,
+    [remoteId],
+  );
+
+  if (existingByRemoteId?.id) {
+    await db.runAsync(
+      `
+      UPDATE conversations
+      SET title = ?,
+          owner_clerk_user_id = ?,
+          contact_name = ?,
+          contact_email = ?,
+          contact_normalized_email = ?,
+          contact_clerk_user_id = ?,
+          synced = 1,
+          sync_error = NULL,
+          updated_at = ?
+      WHERE id = ?;
+      `,
+      [
+        title,
+        ownerClerkUserId,
+        contactName,
+        contactEmail,
+        contactNormalizedEmail,
+        contactClerkUserId,
+        updatedAt,
+        existingByRemoteId.id,
+      ],
+    );
+
+    return existingByRemoteId.id;
+  }
+
+  const existingBetweenUsers = await db.getFirstAsync<{ id: number }>(
+    `
+    SELECT id
+    FROM conversations
+    WHERE (
+      owner_clerk_user_id = ?
+      AND contact_clerk_user_id = ?
+    )
+    OR (
+      owner_clerk_user_id = ?
+      AND contact_clerk_user_id = ?
+    )
+    LIMIT 1;
+    `,
+    [
+      ownerClerkUserId,
+      contactClerkUserId,
+      contactClerkUserId,
+      ownerClerkUserId,
+    ],
+  );
+
+  if (existingBetweenUsers?.id) {
+    await db.runAsync(
+      `
+      UPDATE conversations
+      SET remote_id = ?,
+          title = ?,
+          owner_clerk_user_id = ?,
+          contact_name = ?,
+          contact_email = ?,
+          contact_normalized_email = ?,
+          contact_clerk_user_id = ?,
+          synced = 1,
+          sync_error = NULL,
+          updated_at = ?
+      WHERE id = ?;
+      `,
+      [
+        remoteId,
+        title,
+        ownerClerkUserId,
+        contactName,
+        contactEmail,
+        contactNormalizedEmail,
+        contactClerkUserId,
+        updatedAt,
+        existingBetweenUsers.id,
+      ],
+    );
+
+    return existingBetweenUsers.id;
+  }
+
+  const result = await db.runAsync(
+    `
+    INSERT INTO conversations
+    (
+      title,
+      remote_id,
+      owner_clerk_user_id,
+      contact_name,
+      contact_email,
+      contact_normalized_email,
+      contact_clerk_user_id,
+      synced,
+      sync_error,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?);
+    `,
+    [
+      title,
+      remoteId,
+      ownerClerkUserId,
+      contactName,
+      contactEmail,
+      contactNormalizedEmail,
+      contactClerkUserId,
+      createdAt,
+      updatedAt,
+    ],
+  );
+
+  return Number(result.lastInsertRowId);
+}

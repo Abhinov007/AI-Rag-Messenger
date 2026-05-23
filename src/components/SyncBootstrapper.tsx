@@ -3,6 +3,7 @@ import { useAuth, useUser } from '@clerk/expo';
 import { syncPendingConversations } from '../services/conversationSync';
 import { syncPendingMessages } from '../services/messageSync';
 import { registerCurrentUserInDirectory } from '../services/userDirectory';
+import { pullRemoteConversations } from '../services/conversationPull';
 
 export default function SyncBootstrapper() {
   const { userId, getToken, isLoaded } = useAuth();
@@ -47,7 +48,8 @@ export default function SyncBootstrapper() {
         }
 
         await syncPendingConversations(userId, getClerkToken);
-        await syncPendingMessages(userId, getClerkToken);
+        await pullRemoteConversations(userId, getClerkToken);
+        await syncPendingMessages(userId, getClerkToken);   
 
         console.log('SyncBootstrapper completed');
       } catch (error) {
