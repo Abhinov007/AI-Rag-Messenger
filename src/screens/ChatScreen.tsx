@@ -1,6 +1,7 @@
 /**
  * Single-conversation thread: loads messages from SQLite, supports sending,
- * pulls remote messages, and subscribes to realtime Supabase inserts.
+ * pulls remote messages, subscribes to realtime Supabase inserts,
+ * supports pull-to-refresh, and retries sync while the chat is open.
  */
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,9 +9,11 @@ import { useAuth } from '@clerk/expo';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
   StatusBar,
   StyleSheet,
   Text,
@@ -25,7 +28,7 @@ import { addMessage, getMessagesByConversationId } from '../db/messageRepository
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteMessagesForConversation } from '../services/messagePull';
 import { subscribeToConversationMessages } from '../services/messageRealtime';
-import { syncMessageById } from '../services/messageSync';
+import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 
@@ -45,13 +48,21 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState('');
 
   const subscriptionKeyRef = useRef<string | null>(null);
+  const activeSyncRef = useRef(false);
+  const getTokenRef = useRef(getToken);
+
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
 
   async function getClerkToken(): Promise<string | null> {
-    const token = await getToken({ template: 'supabase' });
+    const token = await getTokenRef.current({ template: 'supabase' });
     return typeof token === 'string' ? token : null;
   }
 
@@ -77,6 +88,75 @@ export default function ChatScreen({ navigation, route }: Props) {
     });
 
     return conversation;
+  }
+
+  async function syncCurrentChat(options?: { showIndicator?: boolean }) {
+    if (activeSyncRef.current) {
+      return;
+    }
+
+    activeSyncRef.current = true;
+
+    if (options?.showIndicator) {
+      setIsSyncing(true);
+    }
+
+    try {
+      const conversation = await getConversationById(conversationId);
+
+      if (!conversation) {
+        setError('Conversation not found.');
+        setMessages([]);
+        return;
+      }
+
+      if (userId) {
+        try {
+          await syncPendingMessages(userId, getClerkToken);
+        } catch (syncError) {
+          console.warn('Pending message sync failed. Will retry later:', syncError);
+        }
+      }
+
+      if (!conversation.remoteId) {
+        console.log('Chat sync skipped remote pull: no remote conversation id.', {
+          localConversationId: conversationId,
+        });
+
+        await loadThread();
+        return;
+      }
+
+      try {
+        await pullRemoteMessagesForConversation({
+          localConversationId: conversationId,
+          remoteConversationId: conversation.remoteId,
+          getClerkToken,
+        });
+      } catch (pullError) {
+        console.warn('Chat sync pull failed. Will retry later:', pullError);
+      }
+
+      await loadThread();
+    } catch (syncError) {
+      console.warn('Current chat sync failed. Will retry later:', syncError);
+    } finally {
+      activeSyncRef.current = false;
+
+      if (options?.showIndicator) {
+        setIsSyncing(false);
+      }
+    }
+  }
+
+  async function handleRefresh() {
+    setIsRefreshing(true);
+
+    try {
+      await syncCurrentChat({ showIndicator: false });
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -109,24 +189,7 @@ export default function ChatScreen({ navigation, route }: Props) {
           contactClerkUserId: conversation.contactClerkUserId,
         });
 
-        try {
-          await pullRemoteMessagesForConversation({
-            localConversationId: conversationId,
-            remoteConversationId: conversation.remoteId,
-            getClerkToken,
-          });
-        } catch (pullError) {
-          console.warn(
-            'Remote message pull failed but chat will still open:',
-            pullError,
-          );
-        }
-
-        if (cancelled) {
-          return;
-        }
-
-        await loadThread();
+        await syncCurrentChat({ showIndicator: false });
 
         if (cancelled) {
           return;
@@ -179,6 +242,28 @@ export default function ChatScreen({ navigation, route }: Props) {
     };
   }, [conversationId, userId]);
 
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        console.log('App active. Syncing current chat...');
+        syncCurrentChat({ showIndicator: true });
+      }
+    });
+
+    const intervalId = setInterval(() => {
+      syncCurrentChat({ showIndicator: false });
+    }, 10000);
+
+    return () => {
+      appStateSubscription.remove();
+      clearInterval(intervalId);
+    };
+  }, [conversationId, userId]);
+
   async function handleSend() {
     const text = draft.trim();
 
@@ -199,8 +284,14 @@ export default function ChatScreen({ navigation, route }: Props) {
         body: text,
       });
 
+      await loadThread();
+
       if (userId) {
-        await syncMessageById(messageId, userId, getClerkToken);
+        try {
+          await syncMessageById(messageId, userId, getClerkToken);
+        } catch (syncError) {
+          console.warn('Message saved locally but sync failed. Will retry later:', syncError);
+        }
       }
 
       await loadThread();
@@ -225,9 +316,13 @@ export default function ChatScreen({ navigation, route }: Props) {
           <Text style={styles.backLabel}>{'< Back'}</Text>
         </TouchableOpacity>
 
-        <Text numberOfLines={1} style={styles.headerTitle}>
-          {title}
-        </Text>
+        <View style={styles.headerTitleWrap}>
+          <Text numberOfLines={1} style={styles.headerTitle}>
+            {title}
+          </Text>
+
+          {isSyncing ? <Text style={styles.syncingText}>Syncing...</Text> : null}
+        </View>
 
         <View style={styles.headerSpacer} />
       </View>
@@ -251,6 +346,15 @@ export default function ChatScreen({ navigation, route }: Props) {
             data={messages}
             extraData={`${messages.length}-${userId ?? ''}`}
             keyExtractor={(item) => String(item.id)}
+            refreshControl={
+              <RefreshControl
+                colors={['#22C55E']}
+                progressBackgroundColor="#102820"
+                refreshing={isRefreshing}
+                tintColor="#22C55E"
+                onRefresh={handleRefresh}
+              />
+            }
             renderItem={({ item }) => {
               const isOwnMessage = item.senderClerkUserId
                 ? item.senderClerkUserId === userId
@@ -290,7 +394,7 @@ export default function ChatScreen({ navigation, route }: Props) {
             }}
             ListEmptyComponent={
               <Text style={styles.emptyThread}>
-                No messages yet. Say hello below.
+                No messages yet. Pull down to refresh or say hello below.
               </Text>
             }
           />
@@ -350,12 +454,21 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
   },
+  headerTitleWrap: {
+    flex: 1,
+    alignItems: 'center',
+  },
   headerTitle: {
     color: '#FFFFFF',
-    flex: 1,
     fontSize: 17,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  syncingText: {
+    color: '#8AA398',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
   },
   headerSpacer: {
     width: 72,
