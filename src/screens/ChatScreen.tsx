@@ -109,11 +109,18 @@ export default function ChatScreen({ navigation, route }: Props) {
           contactClerkUserId: conversation.contactClerkUserId,
         });
 
-        await pullRemoteMessagesForConversation({
-          localConversationId: conversationId,
-          remoteConversationId: conversation.remoteId,
-          getClerkToken,
-        });
+        try {
+          await pullRemoteMessagesForConversation({
+            localConversationId: conversationId,
+            remoteConversationId: conversation.remoteId,
+            getClerkToken,
+          });
+        } catch (pullError) {
+          console.warn(
+            'Remote message pull failed but chat will still open:',
+            pullError,
+          );
+        }
 
         if (cancelled) {
           return;
@@ -183,11 +190,12 @@ export default function ChatScreen({ navigation, route }: Props) {
     setDraft('');
 
     try {
-      const messageId = await addMessage(conversationId, 'user', text);
+      const messageId = await addMessage(conversationId, 'user', text, userId);
 
       console.log('Local message created:', {
         conversationId,
         messageId,
+        senderClerkUserId: userId,
         body: text,
       });
 
@@ -241,16 +249,18 @@ export default function ChatScreen({ navigation, route }: Props) {
           <FlatList
             contentContainerStyle={styles.listContent}
             data={messages}
-            extraData={messages.length}
+            extraData={`${messages.length}-${userId ?? ''}`}
             keyExtractor={(item) => String(item.id)}
             renderItem={({ item }) => {
-              const isUserMessage = item.senderType === 'user';
+              const isOwnMessage = item.senderClerkUserId
+                ? item.senderClerkUserId === userId
+                : item.senderType === 'user';
 
               return (
                 <View
                   style={[
                     styles.bubbleWrap,
-                    isUserMessage
+                    isOwnMessage
                       ? styles.bubbleWrapUser
                       : styles.bubbleWrapOther,
                   ]}
@@ -258,15 +268,15 @@ export default function ChatScreen({ navigation, route }: Props) {
                   <View
                     style={[
                       styles.bubble,
-                      isUserMessage ? styles.bubbleUser : styles.bubbleOther,
+                      isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
                     ]}
                   >
                     <Text style={styles.bubbleMeta}>
-                      {item.senderType === 'user'
+                      {isOwnMessage
                         ? 'You'
                         : item.senderType === 'assistant'
                           ? 'Assistant'
-                          : 'System'}
+                          : title}
                     </Text>
 
                     <Text style={styles.bubbleBody}>{item.body}</Text>

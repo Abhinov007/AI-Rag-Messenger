@@ -16,7 +16,7 @@ async function ensureColumn(
     `PRAGMA table_info(${table});`,
   );
 
-  const names = new Set(rows.map((r) => r.name));
+  const names = new Set(rows.map((row) => row.name));
 
   if (!names.has(column)) {
     await db.execAsync(
@@ -123,6 +123,9 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
     'INTEGER NOT NULL DEFAULT 0',
   );
 
+  // Message ownership field: needed for left/right chat alignment
+  await ensureColumn(db, 'messages', 'sender_clerk_user_id', 'TEXT');
+
   // Contact sync fields
   await ensureColumn(db, 'contacts', 'clerk_user_id', 'TEXT');
   await ensureColumn(db, 'contacts', 'remote_id', 'TEXT');
@@ -168,7 +171,11 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
     ON conversations (contact_clerk_user_id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_remote_id
-    ON messages (remote_id);
+    ON messages (remote_id)
+    WHERE remote_id IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_messages_sender_clerk_user_id
+    ON messages (sender_clerk_user_id);
   `);
 }
 
@@ -203,6 +210,7 @@ export async function runMigrations(db: SQLiteDatabase) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id INTEGER NOT NULL,
       sender_type TEXT NOT NULL CHECK (sender_type IN ('user', 'assistant', 'system')),
+      sender_clerk_user_id TEXT,
       body TEXT NOT NULL,
       summary TEXT,
       remote_id TEXT,

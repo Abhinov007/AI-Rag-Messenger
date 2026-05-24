@@ -62,6 +62,7 @@ export async function pullRemoteMessagesForConversation({
       conversationId: localConversationId,
       remoteId: message.id,
       senderType: message.sender_type,
+      senderClerkUserId: message.clerk_user_id,
       body: message.body,
       summary: message.summary,
       createdAt: message.created_at,
