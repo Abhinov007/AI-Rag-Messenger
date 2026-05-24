@@ -8,13 +8,25 @@ type RemoteConversationRow = {
   clerk_user_id: string | null;
   local_id: number | null;
   title: string | null;
+
   owner_clerk_user_id: string | null;
   contact_clerk_user_id: string | null;
+
   contact_name: string | null;
   contact_email: string | null;
   contact_normalized_email: string | null;
+
+  participant_key: string | null;
+
   created_at: string;
   updated_at: string;
+};
+
+type RemoteAppUserRow = {
+  clerk_user_id: string;
+  email: string;
+  normalized_email: string;
+  display_name: string | null;
 };
 
 export async function pullRemoteConversations(
@@ -41,6 +53,7 @@ export async function pullRemoteConversations(
       contact_name,
       contact_email,
       contact_normalized_email,
+      participant_key,
       created_at,
       updated_at
       `,
@@ -55,33 +68,128 @@ export async function pullRemoteConversations(
     return;
   }
 
+  const conversations = data ?? [];
+
+  const participantIds = Array.from(
+    new Set(
+      conversations
+        .flatMap((conversation) => [
+          conversation.owner_clerk_user_id,
+          conversation.contact_clerk_user_id,
+        ])
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const appUsersByClerkId = await fetchAppUsersByClerkId(
+    participantIds,
+    getClerkToken,
+  );
+
   console.log('Remote conversations pulled:', {
     clerkUserId,
-    count: data?.length ?? 0,
+    count: conversations.length,
   });
 
-  for (const conversation of data ?? []) {
+  for (const conversation of conversations) {
+    const title = getTitleForCurrentUser({
+      conversation,
+      currentUserId: clerkUserId,
+      appUsersByClerkId,
+    });
+
     await upsertPulledConversation({
       remoteId: conversation.id,
-      title: getTitleForCurrentUser(conversation, clerkUserId),
+      title,
+
       ownerClerkUserId: conversation.owner_clerk_user_id,
+
       contactName: conversation.contact_name,
       contactEmail: conversation.contact_email,
       contactNormalizedEmail: conversation.contact_normalized_email,
       contactClerkUserId: conversation.contact_clerk_user_id,
+
+
       createdAt: conversation.created_at,
       updatedAt: conversation.updated_at,
     });
   }
 }
 
-function getTitleForCurrentUser(
-  conversation: RemoteConversationRow,
-  currentUserId: string,
+async function fetchAppUsersByClerkId(
+  clerkUserIds: string[],
+  getClerkToken: GetClerkToken,
 ) {
-  if (conversation.owner_clerk_user_id === currentUserId) {
-    return conversation.contact_name ?? conversation.title ?? 'New Chat';
+  const supabase = createSupabaseClient(getClerkToken);
+  const map = new Map<string, RemoteAppUserRow>();
+
+  if (!supabase || clerkUserIds.length === 0) {
+    return map;
   }
 
-  return conversation.title ?? conversation.contact_name ?? 'New Chat';
+  const { data, error } = await supabase
+    .from('app_users')
+    .select('clerk_user_id,email,normalized_email,display_name')
+    .in('clerk_user_id', clerkUserIds);
+
+  if (error) {
+    console.warn('Could not fetch app users for conversation titles:', {
+      message: error.message,
+    });
+
+    return map;
+  }
+
+  for (const user of data ?? []) {
+    map.set(user.clerk_user_id, user);
+  }
+
+  return map;
+}
+
+function getTitleForCurrentUser({
+  conversation,
+  currentUserId,
+  appUsersByClerkId,
+}: {
+  conversation: RemoteConversationRow;
+  currentUserId: string;
+  appUsersByClerkId: Map<string, RemoteAppUserRow>;
+}) {
+  const isCurrentUserOwner =
+    conversation.owner_clerk_user_id === currentUserId;
+
+  const peerClerkUserId = isCurrentUserOwner
+    ? conversation.contact_clerk_user_id
+    : conversation.owner_clerk_user_id;
+
+  if (isCurrentUserOwner) {
+    return (
+      conversation.contact_name?.trim() ||
+      getDisplayNameFromAppUser(appUsersByClerkId.get(peerClerkUserId ?? '')) ||
+      conversation.contact_email?.trim() ||
+      conversation.title?.trim() ||
+      'New Chat'
+    );
+  }
+
+  return (
+    getDisplayNameFromAppUser(appUsersByClerkId.get(peerClerkUserId ?? '')) ||
+    conversation.title?.trim() ||
+    conversation.contact_name?.trim() ||
+    'New Chat'
+  );
+}
+
+function getDisplayNameFromAppUser(user?: RemoteAppUserRow) {
+  if (!user) {
+    return null;
+  }
+
+  return (
+    user.display_name?.trim() ||
+    user.email?.trim() ||
+    user.normalized_email?.trim() ||
+    null
+  );
 }

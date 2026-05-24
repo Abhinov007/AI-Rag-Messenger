@@ -4,7 +4,7 @@
  * After authentication, this screen renders the conversation list from local
  * SQLite storage initialized by the app root.
  */
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -42,10 +42,12 @@ export default function ChatListScreen({ onLogout }: Props) {
   const [error, setError] = useState('');
 
   const isFirstListFocus = useRef(true);
+  const isLoadingConversationsRef = useRef(false);
+  const lastRemotePullAtRef = useRef(0);
+  const getTokenRef = useRef(getToken);
 
-  const getClerkToken = useCallback(async (): Promise<string | null> => {
-    const token = await getToken({ template: 'supabase' });
-    return typeof token === 'string' ? token : null;
+  useEffect(() => {
+    getTokenRef.current = getToken;
   }, [getToken]);
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -88,6 +90,12 @@ export default function ChatListScreen({ onLogout }: Props) {
       let isMounted = true;
 
       async function loadConversations() {
+        if (isLoadingConversationsRef.current) {
+          return;
+        }
+
+        isLoadingConversationsRef.current = true;
+
         if (isFirstListFocus.current) {
           setIsLoading(true);
         }
@@ -102,13 +110,28 @@ export default function ChatListScreen({ onLogout }: Props) {
             return;
           }
 
-          try {
-            await pullRemoteConversations(userId, getClerkToken);
-          } catch (pullError) {
-            console.warn(
-              'Remote conversation pull failed but local list will still load:',
-              pullError,
-            );
+          const now = Date.now();
+          const shouldPullRemote = now - lastRemotePullAtRef.current > 5000;
+
+          if (shouldPullRemote) {
+            lastRemotePullAtRef.current = now;
+
+            const getClerkToken = async (): Promise<string | null> => {
+              const token = await getTokenRef.current({
+                template: 'supabase',
+              });
+
+              return typeof token === 'string' ? token : null;
+            };
+
+            try {
+              await pullRemoteConversations(userId, getClerkToken);
+            } catch (pullError) {
+              console.warn(
+                'Remote conversation pull failed but local list will still load:',
+                pullError,
+              );
+            }
           }
 
           const rows = await listConversations(userId);
@@ -116,28 +139,21 @@ export default function ChatListScreen({ onLogout }: Props) {
           console.log('ChatList conversations loaded:', {
             userId,
             count: rows.length,
-            rows: rows.map((row) => ({
-              id: row.id,
-              title: row.title,
-              remoteId: row.remoteId,
-              ownerClerkUserId: row.ownerClerkUserId,
-              contactClerkUserId: row.contactClerkUserId,
-              contactEmail: row.contactEmail,
-              lastMessage: row.lastMessage,
-            })),
           });
 
           if (isMounted) {
             setConversations(rows);
             setError('');
           }
-        } catch (error) {
-          console.warn('Could not load conversations:', error);
+        } catch (loadError) {
+          console.warn('Could not load conversations:', loadError);
 
           if (isMounted) {
             setError('Could not load conversations.');
           }
         } finally {
+          isLoadingConversationsRef.current = false;
+
           if (isMounted) {
             setIsLoading(false);
             isFirstListFocus.current = false;
@@ -150,7 +166,7 @@ export default function ChatListScreen({ onLogout }: Props) {
       return () => {
         isMounted = false;
       };
-    }, [userId, getClerkToken]),
+    }, [userId]),
   );
 
   return (
