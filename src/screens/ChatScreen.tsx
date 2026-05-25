@@ -1,7 +1,8 @@
 /**
  * Single-conversation thread: loads messages from SQLite, supports sending,
  * pulls remote messages, subscribes to realtime Supabase inserts,
- * supports pull-to-refresh, and retries sync while the chat is open.
+ * supports pull-to-refresh, retries sync, shows message sync status,
+ * and keeps the composer above the keyboard.
  */
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -12,7 +13,9 @@ import {
   AppState,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
+  Pressable,
   RefreshControl,
   StatusBar,
   StyleSheet,
@@ -21,8 +24,15 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
+import {
+  suggestRepliesForRecentMessages,
+  summarizeRecentMessages,
+} from '../ai/mockAssistant';
 import { getConversationById } from '../db/conversationRepository';
 import { addMessage, getMessagesByConversationId } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
@@ -43,6 +53,7 @@ type Props = {
 export default function ChatScreen({ navigation, route }: Props) {
   const { conversationId, title: titleParam } = route.params;
   const { userId, getToken } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const [title, setTitle] = useState(titleParam ?? 'Chat');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -51,8 +62,18 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [retryingMessageId, setRetryingMessageId] = useState<number | null>(
+    null,
+  );
+  const [isAiMenuVisible, setIsAiMenuVisible] = useState(false);
+  const [isSummaryVisible, setIsSummaryVisible] = useState(false);
+  const [isReplyModalVisible, setIsReplyModalVisible] = useState(false);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [summaryText, setSummaryText] = useState('');
+  const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
   const [error, setError] = useState('');
 
+  const flatListRef = useRef<FlatList<Message>>(null);
   const subscriptionKeyRef = useRef<string | null>(null);
   const activeSyncRef = useRef(false);
   const getTokenRef = useRef(getToken);
@@ -60,6 +81,18 @@ export default function ChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      scrollToBottom(true);
+    }
+  }, [messages.length]);
+
+  function scrollToBottom(animated = true) {
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    });
+  }
 
   async function getClerkToken(): Promise<string | null> {
     const token = await getTokenRef.current({ template: 'supabase' });
@@ -80,12 +113,6 @@ export default function ChatScreen({ navigation, route }: Props) {
 
     const rows = await getMessagesByConversationId(conversationId);
     setMessages(rows);
-
-    console.log('Local messages loaded:', {
-      conversationId,
-      count: rows.length,
-      latest: rows.at(-1)?.body ?? null,
-    });
 
     return conversation;
   }
@@ -119,10 +146,6 @@ export default function ChatScreen({ navigation, route }: Props) {
       }
 
       if (!conversation.remoteId) {
-        console.log('Chat sync skipped remote pull: no remote conversation id.', {
-          localConversationId: conversationId,
-        });
-
         await loadThread();
         return;
       }
@@ -159,6 +182,24 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  async function handleRetryMessage(message: Message) {
+    if (!userId || retryingMessageId === message.id) {
+      return;
+    }
+
+    setRetryingMessageId(message.id);
+
+    try {
+      await syncMessageById(message.id, userId, getClerkToken);
+      await syncCurrentChat({ showIndicator: true });
+    } catch (retryError) {
+      console.warn('Retry message sync failed:', retryError);
+      await loadThread();
+    } finally {
+      setRetryingMessageId(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     let channel: any = null;
@@ -174,20 +215,8 @@ export default function ChatScreen({ navigation, route }: Props) {
         }
 
         if (!conversation.remoteId) {
-          console.log('Remote message setup skipped: no remote conversation id.', {
-            localConversationId: conversationId,
-          });
           return;
         }
-
-        console.log('Chat remote setup:', {
-          currentUserId: userId,
-          localConversationId: conversationId,
-          remoteConversationId: conversation.remoteId,
-          title: conversation.title,
-          ownerClerkUserId: conversation.ownerClerkUserId,
-          contactClerkUserId: conversation.contactClerkUserId,
-        });
 
         await syncCurrentChat({ showIndicator: false });
 
@@ -198,9 +227,6 @@ export default function ChatScreen({ navigation, route }: Props) {
         const subscriptionKey = `${conversationId}:${conversation.remoteId}:${userId}`;
 
         if (subscriptionKeyRef.current === subscriptionKey) {
-          console.log('Realtime skipped: already subscribed.', {
-            subscriptionKey,
-          });
           return;
         }
 
@@ -249,7 +275,6 @@ export default function ChatScreen({ navigation, route }: Props) {
 
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        console.log('App active. Syncing current chat...');
         syncCurrentChat({ showIndicator: true });
       }
     });
@@ -277,14 +302,8 @@ export default function ChatScreen({ navigation, route }: Props) {
     try {
       const messageId = await addMessage(conversationId, 'user', text, userId);
 
-      console.log('Local message created:', {
-        conversationId,
-        messageId,
-        senderClerkUserId: userId,
-        body: text,
-      });
-
       await loadThread();
+      scrollToBottom(true);
 
       if (userId) {
         try {
@@ -295,12 +314,70 @@ export default function ChatScreen({ navigation, route }: Props) {
       }
 
       await loadThread();
+      scrollToBottom(true);
     } catch (sendError) {
       console.warn('Failed to send message:', sendError);
       setError('Could not send message.');
     } finally {
       setIsSending(false);
     }
+  }
+
+  async function handleSummarizeChat() {
+    setIsAiMenuVisible(false);
+    setIsGeneratingAi(true);
+    setSummaryText('');
+
+    try {
+      const result = await summarizeRecentMessages(title, messages);
+      setSummaryText(result);
+      setIsSummaryVisible(true);
+    } catch (summaryError) {
+      console.warn('Mock summary failed:', summaryError);
+      setSummaryText('Could not generate a summary right now.');
+      setIsSummaryVisible(true);
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  }
+
+  async function handleSuggestReplies() {
+    setIsAiMenuVisible(false);
+    setIsGeneratingAi(true);
+    setReplySuggestions([]);
+
+    try {
+      const result = await suggestRepliesForRecentMessages(messages);
+      setReplySuggestions(result.suggestions);
+      setIsReplyModalVisible(true);
+    } catch (suggestionError) {
+      console.warn('Mock reply suggestion failed:', suggestionError);
+      setReplySuggestions(['Could not generate suggestions right now.']);
+      setIsReplyModalVisible(true);
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  }
+
+  function handlePickSuggestion(suggestion: string) {
+    setDraft(suggestion);
+    setIsReplyModalVisible(false);
+  }
+
+  function getOwnMessageStatus(message: Message) {
+    if (retryingMessageId === message.id) {
+      return 'Retrying...';
+    }
+
+    if (message.syncError) {
+      return 'Failed · Tap to retry';
+    }
+
+    if (!message.synced) {
+      return 'Sending...';
+    }
+
+    return 'Sent';
   }
 
   return (
@@ -324,11 +401,17 @@ export default function ChatScreen({ navigation, route }: Props) {
           {isSyncing ? <Text style={styles.syncingText}>Syncing...</Text> : null}
         </View>
 
-        <View style={styles.headerSpacer} />
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={() => setIsAiMenuVisible(true)}
+          style={styles.aiBtn}
+        >
+          <Text style={styles.aiBtnLabel}>AI</Text>
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         style={styles.flex}
       >
@@ -342,10 +425,15 @@ export default function ChatScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <FlatList
+            ref={flatListRef}
             contentContainerStyle={styles.listContent}
             data={messages}
-            extraData={`${messages.length}-${userId ?? ''}`}
+            extraData={`${messages.length}-${userId ?? ''}-${retryingMessageId ?? ''}`}
             keyExtractor={(item) => String(item.id)}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            onContentSizeChange={() => scrollToBottom(false)}
+            onLayout={() => scrollToBottom(false)}
             refreshControl={
               <RefreshControl
                 colors={['#22C55E']}
@@ -359,6 +447,10 @@ export default function ChatScreen({ navigation, route }: Props) {
               const isOwnMessage = item.senderClerkUserId
                 ? item.senderClerkUserId === userId
                 : item.senderType === 'user';
+
+              const statusText = isOwnMessage
+                ? getOwnMessageStatus(item)
+                : null;
 
               return (
                 <View
@@ -385,9 +477,21 @@ export default function ChatScreen({ navigation, route }: Props) {
 
                     <Text style={styles.bubbleBody}>{item.body}</Text>
 
-                    <Text style={styles.messageTime}>
-                      {formatMessageTime(item.createdAt)}
-                    </Text>
+                    <View style={styles.messageFooter}>
+                      <Text style={styles.messageTime}>
+                        {formatMessageTime(item.createdAt)}
+                      </Text>
+
+                      {statusText ? (
+                        item.syncError ? (
+                          <Pressable onPress={() => handleRetryMessage(item)}>
+                            <Text style={styles.failedStatus}>{statusText}</Text>
+                          </Pressable>
+                        ) : (
+                          <Text style={styles.messageStatus}>{statusText}</Text>
+                        )
+                      ) : null}
+                    </View>
                   </View>
                 </View>
               );
@@ -400,7 +504,14 @@ export default function ChatScreen({ navigation, route }: Props) {
           />
         )}
 
-        <View style={styles.composer}>
+        <View
+          style={[
+            styles.composer,
+            {
+              paddingBottom: Math.max(insets.bottom, 8),
+            },
+          ]}
+        >
           <TextInput
             editable={!isLoading && !Boolean(error)}
             multiline
@@ -425,6 +536,122 @@ export default function ChatScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsAiMenuVisible(false)}
+        transparent
+        visible={isAiMenuVisible}
+      >
+        <Pressable
+          onPress={() => setIsAiMenuVisible(false)}
+          style={styles.modalBackdrop}
+        >
+          <Pressable style={styles.actionSheet}>
+            <Text style={styles.modalTitle}>AI tools</Text>
+            <Text style={styles.modalSubtitle}>
+              Use recent chat context to summarize or draft a reply.
+            </Text>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleSummarizeChat}
+              style={styles.actionButton}
+            >
+              <Text style={styles.actionTitle}>Summarize this chat</Text>
+              <Text style={styles.actionDescription}>
+                Show a short AI summary in a separate card.
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleSuggestReplies}
+              style={styles.actionButton}
+            >
+              <Text style={styles.actionTitle}>Suggest a reply</Text>
+              <Text style={styles.actionDescription}>
+                Generate 2-3 editable reply suggestions.
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIsAiMenuVisible(false)}
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.secondaryButtonLabel}>Close</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsSummaryVisible(false)}
+        transparent
+        visible={isSummaryVisible}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.resultCard}>
+            <Text style={styles.modalTitle}>Chat Summary</Text>
+            <Text style={styles.summaryBody}>{summaryText}</Text>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIsSummaryVisible(false)}
+              style={styles.primaryButton}
+            >
+              <Text style={styles.primaryButtonLabel}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsReplyModalVisible(false)}
+        transparent
+        visible={isReplyModalVisible}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.resultCard}>
+            <Text style={styles.modalTitle}>AI Reply Suggestions</Text>
+            <Text style={styles.modalSubtitle}>
+              Tap a suggestion to fill the message box. You can edit before sending.
+            </Text>
+
+            {replySuggestions.map((suggestion, index) => (
+              <TouchableOpacity
+                key={`${suggestion}-${index}`}
+                activeOpacity={0.85}
+                onPress={() => handlePickSuggestion(suggestion)}
+                style={styles.suggestionButton}
+              >
+                <Text style={styles.suggestionIndex}>{index + 1}.</Text>
+                <Text style={styles.suggestionText}>{suggestion}</Text>
+              </TouchableOpacity>
+            ))}
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIsReplyModalVisible(false)}
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.secondaryButtonLabel}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {isGeneratingAi ? (
+        <View pointerEvents="none" style={styles.aiLoadingOverlay}>
+          <View style={styles.aiLoadingCard}>
+            <ActivityIndicator color="#25D366" />
+            <Text style={styles.aiLoadingText}>AI is preparing a response...</Text>
+          </View>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -470,8 +697,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 2,
   },
-  headerSpacer: {
-    width: 72,
+  aiBtn: {
+    alignItems: 'center',
+    backgroundColor: '#25D366',
+    borderRadius: 18,
+    justifyContent: 'center',
+    minWidth: 52,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  aiBtnLabel: {
+    color: '#071A14',
+    fontSize: 14,
+    fontWeight: '900',
   },
   centered: {
     flex: 1,
@@ -486,10 +724,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   listContent: {
+    flexGrow: 1,
     paddingHorizontal: 12,
     paddingVertical: 12,
     paddingBottom: 8,
-    flexGrow: 1,
   },
   bubbleWrap: {
     marginBottom: 10,
@@ -529,12 +767,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
   },
-  messageTime: {
+  messageFooter: {
+    alignItems: 'center',
     alignSelf: 'flex-end',
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 6,
+  },
+  messageTime: {
     color: '#8AA398',
     fontSize: 11,
     fontWeight: '700',
-    marginTop: 6,
+  },
+  messageStatus: {
+    color: '#8AA398',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  failedStatus: {
+    color: '#FFB4A8',
+    fontSize: 11,
+    fontWeight: '800',
   },
   emptyThread: {
     color: '#8AA398',
@@ -549,26 +802,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    paddingBottom: Platform.OS === 'ios' ? 18 : 12,
+    paddingTop: 10,
     backgroundColor: '#071A14',
   },
   input: {
     backgroundColor: '#102820',
     borderColor: '#1D3B31',
-    borderRadius: 12,
+    borderRadius: 18,
     borderWidth: 1,
     color: '#FFFFFF',
     flex: 1,
     fontSize: 16,
-    maxHeight: 120,
+    maxHeight: 110,
     minHeight: 44,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: Platform.OS === 'ios' ? 11 : 8,
+    textAlignVertical: 'top',
   },
   sendBtn: {
     backgroundColor: '#25D366',
-    borderRadius: 12,
+    borderRadius: 18,
     paddingHorizontal: 18,
     paddingVertical: 12,
   },
@@ -579,5 +832,143 @@ const styles = StyleSheet.create({
     color: '#071A14',
     fontSize: 15,
     fontWeight: '900',
+  },
+  modalBackdrop: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(3, 10, 8, 0.72)',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  actionSheet: {
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 18,
+    width: '100%',
+    maxWidth: 420,
+  },
+  resultCard: {
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 18,
+    width: '100%',
+    maxWidth: 420,
+  },
+  modalTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  modalSubtitle: {
+    color: '#A6BBB1',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
+  },
+  actionButton: {
+    backgroundColor: '#0F4D3A',
+    borderColor: '#1D6B52',
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  actionTitle: {
+    color: '#F4FFF9',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  actionDescription: {
+    color: '#A6BBB1',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  summaryBody: {
+    color: '#E8F5EF',
+    fontSize: 15,
+    lineHeight: 23,
+    marginTop: 14,
+  },
+  suggestionButton: {
+    alignItems: 'flex-start',
+    backgroundColor: '#0C211B',
+    borderColor: '#1D3B31',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  suggestionIndex: {
+    color: '#25D366',
+    fontSize: 15,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  suggestionText: {
+    color: '#E8F5EF',
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  primaryButton: {
+    alignItems: 'center',
+    backgroundColor: '#25D366',
+    borderRadius: 16,
+    marginTop: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+  },
+  primaryButtonLabel: {
+    color: '#071A14',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  secondaryButton: {
+    alignItems: 'center',
+    borderColor: '#1D3B31',
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+  },
+  secondaryButtonLabel: {
+    color: '#E8F5EF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  aiLoadingOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(3, 10, 8, 0.42)',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  aiLoadingCard: {
+    alignItems: 'center',
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  aiLoadingText: {
+    color: '#E8F5EF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
