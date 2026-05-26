@@ -27,7 +27,7 @@ export async function syncPendingConversations(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
 ) {
-  const conversations = await getUnsyncedConversations();
+  const conversations = await getUnsyncedConversations(clerkUserId);
 
   console.log('Supabase pending conversation sync check:', {
     pendingCount: conversations.length,

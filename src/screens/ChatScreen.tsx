@@ -100,7 +100,7 @@ export default function ChatScreen({ navigation, route }: Props) {
   }
 
   async function loadThread() {
-    const conversation = await getConversationById(conversationId);
+    const conversation = await getConversationById(conversationId, userId ?? undefined);
 
     if (!conversation) {
       setError('Conversation not found.');
@@ -111,7 +111,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     setTitle(conversation.title ?? 'Chat');
     setError('');
 
-    const rows = await getMessagesByConversationId(conversationId);
+    const rows = await getMessagesByConversationId(
+      conversationId,
+      userId ?? undefined,
+    );
     setMessages(rows);
 
     return conversation;
@@ -129,7 +132,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
 
     try {
-      const conversation = await getConversationById(conversationId);
+      const conversation = await getConversationById(
+        conversationId,
+        userId ?? undefined,
+      );
 
       if (!conversation) {
         setError('Conversation not found.');

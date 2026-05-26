@@ -66,6 +66,29 @@ function mapConversationListItem(
   };
 }
 
+function applyConversationAccessScope(
+  baseQuery: string,
+  currentClerkUserId?: string,
+) {
+  if (!currentClerkUserId) {
+    return {
+      query: baseQuery,
+      params: [] as Array<string | number>,
+    };
+  }
+
+  return {
+    query: `
+      ${baseQuery}
+      AND (
+        owner_clerk_user_id = ?
+        OR contact_clerk_user_id = ?
+      )
+    `,
+    params: [currentClerkUserId, currentClerkUserId] as Array<string | number>,
+  };
+}
+
 export async function createConversation(
   conversation: ConversationCreateInput,
 ): Promise<number> {
@@ -157,10 +180,10 @@ export async function listConversations(
 
 export async function getConversationById(
   id: number,
+  currentClerkUserId?: string,
 ): Promise<Conversation | null> {
   const db = await getDatabase();
-
-  const row = await db.getFirstAsync<ConversationRow>(
+  const scoped = applyConversationAccessScope(
     `
     SELECT
       id,
@@ -176,9 +199,16 @@ export async function getConversationById(
       contact_normalized_email,
       contact_clerk_user_id
     FROM conversations
-    WHERE id = ?;
+    WHERE id = ?
     `,
-    [id],
+    currentClerkUserId,
+  );
+
+  const row = await db.getFirstAsync<ConversationRow>(
+    `${scoped.query}
+    LIMIT 1;
+    `,
+    [id, ...scoped.params],
   );
 
   return row ? mapConversation(row) : null;
@@ -261,14 +291,17 @@ export async function getConversationBetweenUsers(
 
 export async function getConversation(
   conversationId: number,
+  currentClerkUserId?: string,
 ): Promise<Conversation | null> {
-  return getConversationById(conversationId);
+  return getConversationById(conversationId, currentClerkUserId);
 }
 
-export async function getUnsyncedConversations(): Promise<Conversation[]> {
+export async function getUnsyncedConversations(
+  currentClerkUserId?: string,
+): Promise<Conversation[]> {
   const db = await getDatabase();
-
-  const rows = await db.getAllAsync<ConversationRow>(`
+  const scoped = applyConversationAccessScope(
+    `
     SELECT
       id,
       title,
@@ -284,8 +317,17 @@ export async function getUnsyncedConversations(): Promise<Conversation[]> {
       contact_clerk_user_id
     FROM conversations
     WHERE synced = 0
+    `,
+    currentClerkUserId,
+  );
+
+  const rows = await db.getAllAsync<ConversationRow>(
+    `
+    ${scoped.query}
     ORDER BY datetime(created_at) ASC, id ASC;
-  `);
+    `,
+    scoped.params,
+  );
 
   return rows.map(mapConversation);
 }

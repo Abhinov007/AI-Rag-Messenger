@@ -28,7 +28,7 @@ export async function syncMessageById(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
 ) {
-  const message = await getMessageById(messageId);
+  const message = await getMessageById(messageId, clerkUserId);
 
   if (!message || message.synced) {
     return;
@@ -41,7 +41,7 @@ export async function syncPendingMessages(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
 ) {
-  const messages = await getUnsyncedMessages();
+  const messages = await getUnsyncedMessages(clerkUserId);
 
   console.log('Supabase pending sync check:', {
     pendingCount: messages.length,
@@ -57,8 +57,10 @@ async function getRemoteConversationIdForMessage(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
 ): Promise<string | null> {
-  let conversation = await getConversationById(message.conversationId);
-
+  let conversation = await getConversationById(
+    message.conversationId,
+    clerkUserId,
+  );
   if (conversation?.remoteId) {
     return conversation.remoteId;
   }
@@ -72,7 +74,7 @@ async function getRemoteConversationIdForMessage(
 
   await syncPendingConversations(clerkUserId, getClerkToken);
 
-  conversation = await getConversationById(message.conversationId);
+  conversation = await getConversationById(message.conversationId, clerkUserId);
 
   if (conversation?.remoteId) {
     return conversation.remoteId;

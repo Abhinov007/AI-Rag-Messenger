@@ -42,6 +42,34 @@ function mapMessage(row: MessageRow): Message {
   };
 }
 
+function applyMessageAccessScope(
+  baseQuery: string,
+  currentClerkUserId?: string,
+) {
+  if (!currentClerkUserId) {
+    return {
+      query: baseQuery,
+      params: [] as Array<string | number>,
+    };
+  }
+
+  return {
+    query: `
+      ${baseQuery}
+      AND EXISTS (
+        SELECT 1
+        FROM conversations
+        WHERE conversations.id = messages.conversation_id
+          AND (
+            conversations.owner_clerk_user_id = ?
+            OR conversations.contact_clerk_user_id = ?
+          )
+      )
+    `,
+    params: [currentClerkUserId, currentClerkUserId] as Array<string | number>,
+  };
+}
+
 async function touchConversationAfterMessage(
   db: Awaited<ReturnType<typeof getDatabase>>,
   conversationId: number,
@@ -146,10 +174,10 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
  */
 export async function getMessagesByConversationId(
   conversationId: number,
+  currentClerkUserId?: string,
 ): Promise<Message[]> {
   const db = await getDatabase();
-
-  const rows = await db.getAllAsync<MessageRow>(
+  const scoped = applyMessageAccessScope(
     `
     SELECT
       id,
@@ -164,18 +192,27 @@ export async function getMessagesByConversationId(
       created_at
     FROM messages
     WHERE conversation_id = ?
+    `,
+    currentClerkUserId,
+  );
+
+  const rows = await db.getAllAsync<MessageRow>(
+    `
+    ${scoped.query}
     ORDER BY datetime(created_at) ASC, id ASC;
     `,
-    [conversationId],
+    [conversationId, ...scoped.params],
   );
 
   return rows.map(mapMessage);
 }
 
-export async function getMessageById(messageId: number): Promise<Message | null> {
+export async function getMessageById(
+  messageId: number,
+  currentClerkUserId?: string,
+): Promise<Message | null> {
   const db = await getDatabase();
-
-  const row = await db.getFirstAsync<MessageRow>(
+  const scoped = applyMessageAccessScope(
     `
     SELECT
       id,
@@ -189,18 +226,27 @@ export async function getMessageById(messageId: number): Promise<Message | null>
       synced,
       created_at
     FROM messages
-    WHERE id = ?;
+    WHERE id = ?
     `,
-    [messageId],
+    currentClerkUserId,
+  );
+
+  const row = await db.getFirstAsync<MessageRow>(
+    `
+    ${scoped.query}
+    LIMIT 1;
+    `,
+    [messageId, ...scoped.params],
   );
 
   return row ? mapMessage(row) : null;
 }
 
-export async function getUnsyncedMessages(): Promise<Message[]> {
+export async function getUnsyncedMessages(
+  currentClerkUserId?: string,
+): Promise<Message[]> {
   const db = await getDatabase();
-
-  const rows = await db.getAllAsync<MessageRow>(
+  const scoped = applyMessageAccessScope(
     `
     SELECT
       id,
@@ -215,16 +261,27 @@ export async function getUnsyncedMessages(): Promise<Message[]> {
       created_at
     FROM messages
     WHERE synced = 0
+    `,
+    currentClerkUserId,
+  );
+
+  const rows = await db.getAllAsync<MessageRow>(
+    `
+    ${scoped.query}
     ORDER BY datetime(created_at) ASC, id ASC;
     `,
+    scoped.params,
   );
 
   return rows.map(mapMessage);
 }
 
 /** @deprecated Prefer `getMessagesByConversationId`. */
-export async function listMessages(conversationId: number): Promise<Message[]> {
-  return getMessagesByConversationId(conversationId);
+export async function listMessages(
+  conversationId: number,
+  currentClerkUserId?: string,
+): Promise<Message[]> {
+  return getMessagesByConversationId(conversationId, currentClerkUserId);
 }
 
 /**
