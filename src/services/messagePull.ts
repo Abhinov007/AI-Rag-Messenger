@@ -3,6 +3,7 @@ import {
   upsertRemoteMessageLocally,
 } from '../db/messageRepository';
 import type { MessageSenderType } from '../types/message';
+import { getErrorMessage } from './serviceErrors';
 import { createSupabaseClient } from './supabase';
 
 type GetClerkToken = () => Promise<string | null>;
@@ -31,8 +32,7 @@ export async function pullRemoteMessagesForConversation({
   const supabase = createSupabaseClient(getClerkToken);
 
   if (!supabase) {
-    console.warn('Remote message pull skipped: Supabase client missing.');
-    return;
+    throw new Error('Remote message pull failed: Supabase client missing.');
   }
 
   const latestRemoteCreatedAt = await getLatestRemoteMessageCreatedAt(
@@ -63,8 +63,7 @@ export async function pullRemoteMessagesForConversation({
   const { data, error } = await query;
 
   if (error) {
-    console.warn('Remote message pull failed:', error.message);
-    return;
+    throw new Error(`Remote message pull failed: ${error.message}`);
   }
 
   console.log('Remote messages pulled:', {
@@ -75,14 +74,20 @@ export async function pullRemoteMessagesForConversation({
   });
 
   for (const message of data ?? []) {
-    await upsertRemoteMessageLocally({
-      conversationId: localConversationId,
-      remoteId: message.id,
-      senderType: message.sender_type,
-      senderClerkUserId: message.clerk_user_id,
-      body: message.body,
-      summary: message.summary,
-      createdAt: message.created_at,
-    });
+    try {
+      await upsertRemoteMessageLocally({
+        conversationId: localConversationId,
+        remoteId: message.id,
+        senderType: message.sender_type,
+        senderClerkUserId: message.clerk_user_id,
+        body: message.body,
+        summary: message.summary,
+        createdAt: message.created_at,
+      });
+    } catch (error) {
+      throw new Error(
+        `Remote message save failed for ${message.id}: ${getErrorMessage(error)}`,
+      );
+    }
   }
 }   

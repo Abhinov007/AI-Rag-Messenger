@@ -5,6 +5,7 @@ import { syncPendingConversations } from '../services/conversationSync';
 import { syncPendingMessages } from '../services/messageSync';
 import { registerCurrentUserInDirectory } from '../services/userDirectory';
 import { pullRemoteConversations } from '../services/conversationPull';
+import { getErrorMessage } from '../services/serviceErrors';
 
 export default function SyncBootstrapper() {
   const { userId, getToken, isLoaded } = useAuth();
@@ -76,7 +77,7 @@ export default function SyncBootstrapper() {
 
         console.log('SyncBootstrapper completed');
       } catch (error) {
-        console.warn('Initial sync failed:', error);
+        console.warn('Initial sync failed:', getErrorMessage(error));
       }
     }
 

@@ -1,4 +1,5 @@
 import { upsertPulledConversation } from '../db/conversationRepository';
+import { getErrorMessage } from './serviceErrors';
 import { createSupabaseClient } from './supabase';
 
 type GetClerkToken = () => Promise<string | null>;
@@ -36,8 +37,7 @@ export async function pullRemoteConversations(
   const supabase = createSupabaseClient(getClerkToken);
 
   if (!supabase) {
-    console.warn('Remote conversation pull skipped: Supabase client missing.');
-    return;
+    throw new Error('Remote conversation pull failed: Supabase client missing.');
   }
 
   const { data, error } = await supabase
@@ -64,8 +64,7 @@ export async function pullRemoteConversations(
     .order('updated_at', { ascending: false });
 
   if (error) {
-    console.warn('Remote conversation pull failed:', error.message);
-    return;
+    throw new Error(`Remote conversation pull failed: ${error.message}`);
   }
 
   const conversations = data ?? [];
@@ -98,21 +97,26 @@ export async function pullRemoteConversations(
       appUsersByClerkId,
     });
 
-    await upsertPulledConversation({
-      remoteId: conversation.id,
-      title,
+    try {
+      await upsertPulledConversation({
+        remoteId: conversation.id,
+        title,
 
-      ownerClerkUserId: conversation.owner_clerk_user_id,
+        ownerClerkUserId: conversation.owner_clerk_user_id,
 
-      contactName: conversation.contact_name,
-      contactEmail: conversation.contact_email,
-      contactNormalizedEmail: conversation.contact_normalized_email,
-      contactClerkUserId: conversation.contact_clerk_user_id,
+        contactName: conversation.contact_name,
+        contactEmail: conversation.contact_email,
+        contactNormalizedEmail: conversation.contact_normalized_email,
+        contactClerkUserId: conversation.contact_clerk_user_id,
 
-
-      createdAt: conversation.created_at,
-      updatedAt: conversation.updated_at,
-    });
+        createdAt: conversation.created_at,
+        updatedAt: conversation.updated_at,
+      });
+    } catch (error) {
+      throw new Error(
+        `Remote conversation save failed for ${conversation.id}: ${getErrorMessage(error)}`,
+      );
+    }
   }
 }
 
@@ -133,11 +137,9 @@ async function fetchAppUsersByClerkId(
     .in('clerk_user_id', clerkUserIds);
 
   if (error) {
-    console.warn('Could not fetch app users for conversation titles:', {
-      message: error.message,
-    });
-
-    return map;
+    throw new Error(
+      `Could not fetch app users for conversation titles: ${error.message}`,
+    );
   }
 
   for (const user of data ?? []) {

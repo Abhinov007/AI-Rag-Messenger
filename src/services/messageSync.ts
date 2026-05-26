@@ -14,6 +14,7 @@ import {
 } from '../db/messageRepository';
 import { getConversationById } from '../db/conversationRepository';
 import type { Message } from '../types/message';
+import { throwIfFailures } from './serviceErrors';
 import { createSupabaseClient } from './supabase';
 import { syncPendingConversations } from './conversationSync';
 
@@ -42,14 +43,25 @@ export async function syncPendingMessages(
   getClerkToken: GetClerkToken,
 ) {
   const messages = await getUnsyncedMessages(clerkUserId);
+  const failures: Error[] = [];
 
   console.log('Supabase pending sync check:', {
     pendingCount: messages.length,
   });
 
   for (const message of messages) {
-    await pushMessageToSupabase(message, clerkUserId, getClerkToken);
+    try {
+      await pushMessageToSupabase(message, clerkUserId, getClerkToken);
+    } catch (error) {
+      failures.push(
+        error instanceof Error
+          ? error
+          : new Error(String(error)),
+      );
+    }
   }
+
+  throwIfFailures(failures, 'One or more messages failed to sync to Supabase.');
 }
 
 async function getRemoteConversationIdForMessage(
@@ -96,8 +108,9 @@ async function pushMessageToSupabase(
       'Supabase client could not be created.',
     );
 
-    console.warn('Supabase sync skipped: client could not be created.');
-    return;
+    throw new Error(
+      `Supabase message sync failed for ${message.id}: client could not be created.`,
+    );
   }
 
   const remoteConversationId = await getRemoteConversationIdForMessage(
@@ -111,13 +124,9 @@ async function pushMessageToSupabase(
 
     await markMessageSyncFailed(message.id, errorMessage);
 
-    console.warn('Supabase message sync skipped:', {
-      localMessageId: message.id,
-      localConversationId: message.conversationId,
-      reason: errorMessage,
-    });
-
-    return;
+    throw new Error(
+      `Supabase message sync failed for ${message.id}: ${errorMessage}`,
+    );
   }
 
   console.log('Trying Supabase sync:', {
@@ -171,13 +180,9 @@ async function pushMessageToSupabase(
 
       if (fetchError) {
         await markMessageSyncFailed(message.id, fetchError.message);
-
-        console.warn(
-          'Failed to fetch duplicate Supabase message:',
-          fetchError.message,
+        throw new Error(
+          `Failed to recover duplicate Supabase message for ${message.id}: ${fetchError.message}`,
         );
-
-        return;
       }
 
       if (existingRow?.id) {
@@ -193,9 +198,9 @@ async function pushMessageToSupabase(
     }
 
     await markMessageSyncFailed(message.id, error.message);
-
-    console.warn('Supabase message sync failed:', error.message);
-    return;
+    throw new Error(
+      `Supabase message sync failed for ${message.id}: ${error.message}`,
+    );
   }
 
   if (data?.id) {
