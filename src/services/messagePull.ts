@@ -1,4 +1,7 @@
-import { upsertRemoteMessageLocally } from '../db/messageRepository';
+import {
+  getLatestRemoteMessageCreatedAt,
+  upsertRemoteMessageLocally,
+} from '../db/messageRepository';
 import type { MessageSenderType } from '../types/message';
 import { createSupabaseClient } from './supabase';
 
@@ -17,10 +20,12 @@ type RemoteMessageRow = {
 export async function pullRemoteMessagesForConversation({
   localConversationId,
   remoteConversationId,
+  currentClerkUserId,
   getClerkToken,
 }: {
   localConversationId: number;
   remoteConversationId: string;
+  currentClerkUserId?: string;
   getClerkToken: GetClerkToken;
 }) {
   const supabase = createSupabaseClient(getClerkToken);
@@ -30,7 +35,12 @@ export async function pullRemoteMessagesForConversation({
     return;
   }
 
-  const { data, error } = await supabase
+  const latestRemoteCreatedAt = await getLatestRemoteMessageCreatedAt(
+    localConversationId,
+    currentClerkUserId,
+  );
+
+  let query = supabase
     .from('messages')
     .select(
       `
@@ -46,6 +56,12 @@ export async function pullRemoteMessagesForConversation({
     .eq('conversation_remote_id', remoteConversationId)
     .order('created_at', { ascending: true });
 
+  if (latestRemoteCreatedAt) {
+    query = query.gte('created_at', latestRemoteCreatedAt);
+  }
+
+  const { data, error } = await query;
+
   if (error) {
     console.warn('Remote message pull failed:', error.message);
     return;
@@ -54,6 +70,7 @@ export async function pullRemoteMessagesForConversation({
   console.log('Remote messages pulled:', {
     localConversationId,
     remoteConversationId,
+    latestRemoteCreatedAt,
     count: data?.length ?? 0,
   });
 

@@ -276,6 +276,33 @@ export async function getUnsyncedMessages(
   return rows.map(mapMessage);
 }
 
+export async function getLatestRemoteMessageCreatedAt(
+  conversationId: number,
+  currentClerkUserId?: string,
+): Promise<string | null> {
+  const db = await getDatabase();
+  const scoped = applyMessageAccessScope(
+    `
+    SELECT created_at
+    FROM messages
+    WHERE conversation_id = ?
+      AND remote_id IS NOT NULL
+    `,
+    currentClerkUserId,
+  );
+
+  const row = await db.getFirstAsync<{ created_at: string }>(
+    `
+    ${scoped.query}
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT 1;
+    `,
+    [conversationId, ...scoped.params],
+  );
+
+  return row?.created_at ?? null;
+}
+
 /** @deprecated Prefer `getMessagesByConversationId`. */
 export async function listMessages(
   conversationId: number,

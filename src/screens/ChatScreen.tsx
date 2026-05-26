@@ -160,6 +160,7 @@ export default function ChatScreen({ navigation, route }: Props) {
         await pullRemoteMessagesForConversation({
           localConversationId: conversationId,
           remoteConversationId: conversation.remoteId,
+          currentClerkUserId: userId ?? undefined,
           getClerkToken,
         });
       } catch (pullError) {
