@@ -79,6 +79,82 @@ function applyMessageAccessScope(
   };
 }
 
+function buildMessageHistoryQuery(currentClerkUserId?: string) {
+  const liveAccessClause = currentClerkUserId
+    ? `
+      AND EXISTS (
+        SELECT 1
+        FROM conversations
+        WHERE conversations.id = messages.conversation_id
+          AND (
+            conversations.owner_clerk_user_id = ?
+            OR conversations.contact_clerk_user_id = ?
+          )
+      )
+    `
+    : '';
+
+  const archiveAccessClause = currentClerkUserId
+    ? `
+      AND EXISTS (
+        SELECT 1
+        FROM conversations
+        WHERE conversations.id = messages_archive.conversation_id
+          AND (
+            conversations.owner_clerk_user_id = ?
+            OR conversations.contact_clerk_user_id = ?
+          )
+      )
+    `
+    : '';
+
+  const accessParams = currentClerkUserId
+    ? [currentClerkUserId, currentClerkUserId]
+    : [];
+
+  return {
+    query: `
+      SELECT
+        id,
+        conversation_id,
+        sender_type,
+        sender_clerk_user_id,
+        body,
+        summary,
+        remote_id,
+        sync_error,
+        synced,
+        created_at,
+        created_at_unix
+      FROM messages
+      WHERE conversation_id = ?
+      ${liveAccessClause}
+
+      UNION ALL
+
+      SELECT
+        id,
+        conversation_id,
+        sender_type,
+        sender_clerk_user_id,
+        body,
+        summary,
+        remote_id,
+        sync_error,
+        synced,
+        created_at,
+        created_at_unix
+      FROM messages_archive
+      WHERE conversation_id = ?
+      ${archiveAccessClause}
+    `,
+    params: [
+      ...accessParams,
+      ...accessParams,
+    ] as Array<string | number>,
+  };
+}
+
 async function touchConversationAfterMessage(
   db: Awaited<ReturnType<typeof getDatabase>>,
   conversationId: number,
@@ -193,7 +269,10 @@ export async function getMessagesByConversationId(
   currentClerkUserId?: string,
 ): Promise<Message[]> {
   const db = await getDatabase();
-  const scoped = applyMessageAccessScope(
+  const history = buildMessageHistoryQuery(currentClerkUserId);
+  const accessParamCount = history.params.length / 2;
+
+  const rows = await db.getAllAsync<MessageRow>(
     `
     SELECT
       id,
@@ -206,18 +285,17 @@ export async function getMessagesByConversationId(
       sync_error,
       synced,
       created_at
-    FROM messages
-    WHERE conversation_id = ?
-    `,
-    currentClerkUserId,
-  );
-
-  const rows = await db.getAllAsync<MessageRow>(
-    `
-    ${scoped.query}
+    FROM (
+      ${history.query}
+    )
     ORDER BY created_at_unix ASC, id ASC;
     `,
-    [conversationId, ...scoped.params],
+    [
+      conversationId,
+      ...history.params.slice(0, accessParamCount),
+      conversationId,
+      ...history.params.slice(accessParamCount),
+    ],
   );
 
   return rows.map(mapMessage);
@@ -237,24 +315,8 @@ export async function getMessagePageByConversationId({
   beforeId?: number;
 }): Promise<MessagePage> {
   const db = await getDatabase();
-  const scoped = applyMessageAccessScope(
-    `
-    SELECT
-      id,
-      conversation_id,
-      sender_type,
-      sender_clerk_user_id,
-      body,
-      summary,
-      remote_id,
-      sync_error,
-      synced,
-      created_at
-    FROM messages
-    WHERE conversation_id = ?
-    `,
-    currentClerkUserId,
-  );
+  const history = buildMessageHistoryQuery(currentClerkUserId);
+  const accessParamCount = history.params.length / 2;
 
   const cursorClause =
     beforeCreatedAt && beforeId != null
@@ -267,7 +329,12 @@ export async function getMessagePageByConversationId({
       : '';
 
   const fetchLimit = limit + 1;
-  const params: Array<string | number> = [conversationId, ...scoped.params];
+  const params: Array<string | number> = [
+    conversationId,
+    ...history.params.slice(0, accessParamCount),
+    conversationId,
+    ...history.params.slice(accessParamCount),
+  ];
 
   if (beforeCreatedAt && beforeId != null) {
     params.push(beforeCreatedAt, beforeCreatedAt, beforeId);
@@ -277,7 +344,21 @@ export async function getMessagePageByConversationId({
 
   const rows = await db.getAllAsync<MessageRow>(
     `
-    ${scoped.query}
+    SELECT
+      id,
+      conversation_id,
+      sender_type,
+      sender_clerk_user_id,
+      body,
+      summary,
+      remote_id,
+      sync_error,
+      synced,
+      created_at
+    FROM (
+      ${history.query}
+    )
+    WHERE 1 = 1
     ${cursorClause}
     ORDER BY created_at_unix DESC, id DESC
     LIMIT ?;
@@ -368,23 +449,25 @@ export async function getLatestRemoteMessageCreatedAt(
   currentClerkUserId?: string,
 ): Promise<string | null> {
   const db = await getDatabase();
-  const scoped = applyMessageAccessScope(
-    `
-    SELECT created_at
-    FROM messages
-    WHERE conversation_id = ?
-      AND remote_id IS NOT NULL
-    `,
-    currentClerkUserId,
-  );
+  const history = buildMessageHistoryQuery(currentClerkUserId);
+  const accessParamCount = history.params.length / 2;
 
   const row = await db.getFirstAsync<{ created_at: string }>(
     `
-    ${scoped.query}
+    SELECT created_at
+    FROM (
+      ${history.query}
+    )
+    WHERE remote_id IS NOT NULL
     ORDER BY created_at_unix DESC, id DESC
     LIMIT 1;
     `,
-    [conversationId, ...scoped.params],
+    [
+      conversationId,
+      ...history.params.slice(0, accessParamCount),
+      conversationId,
+      ...history.params.slice(accessParamCount),
+    ],
   );
 
   return row?.created_at ?? null;
@@ -582,6 +665,27 @@ export async function upsertRemoteMessageLocally({
     );
 
     return existing.id;
+  }
+
+  const archived = await db.getFirstAsync<{ id: number }>(
+    `
+    SELECT id
+    FROM messages_archive
+    WHERE remote_id = ?
+    LIMIT 1;
+    `,
+    [remoteId],
+  );
+
+  if (archived?.id) {
+    await touchConversationAfterMessage(
+      db,
+      conversationId,
+      body,
+      normalizedCreatedAt,
+    );
+
+    return archived.id;
   }
 
   const result = await db.runAsync(

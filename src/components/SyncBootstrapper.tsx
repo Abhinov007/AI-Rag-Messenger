@@ -6,6 +6,7 @@ import { syncPendingMessages } from '../services/messageSync';
 import { registerCurrentUserInDirectory } from '../services/userDirectory';
 import { pullRemoteConversations } from '../services/conversationPull';
 import { getErrorMessage } from '../services/serviceErrors';
+import { archiveOldSyncedMessages } from '../db/maintenance';
 
 export default function SyncBootstrapper() {
   const { userId, getToken, isLoaded } = useAuth();
@@ -74,6 +75,15 @@ export default function SyncBootstrapper() {
         await syncPendingConversations(userId, getClerkToken);
         await pullRemoteConversations(userId, getClerkToken);
         await syncPendingMessages(userId, getClerkToken);
+
+        try {
+          await archiveOldSyncedMessages();
+        } catch (maintenanceError) {
+          console.warn(
+            'Local message archive maintenance failed:',
+            getErrorMessage(maintenanceError),
+          );
+        }
 
         console.log('SyncBootstrapper completed');
       } catch (error) {

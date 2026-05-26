@@ -153,26 +153,55 @@ export async function getConversations(
       conversations.contact_email,
       conversations.contact_normalized_email,
       conversations.contact_clerk_user_id,
-      COALESCE(conversations.last_message, latest_message.body) AS last_message,
-      latest_message.created_at AS last_message_at,
-      COUNT(messages.id) AS message_count
-    FROM conversations
-    LEFT JOIN messages
-      ON messages.conversation_id = conversations.id
-    LEFT JOIN messages AS latest_message
-      ON latest_message.id = (
-        SELECT id
-        FROM messages
-        WHERE conversation_id = conversations.id
+      COALESCE(
+        conversations.last_message,
+        (
+          SELECT body
+          FROM (
+            SELECT body, created_at_unix, id
+            FROM messages
+            WHERE conversation_id = conversations.id
+            UNION ALL
+            SELECT body, created_at_unix, id
+            FROM messages_archive
+            WHERE conversation_id = conversations.id
+          )
+          ORDER BY created_at_unix DESC, id DESC
+          LIMIT 1
+        )
+      ) AS last_message,
+      (
+        SELECT created_at
+        FROM (
+          SELECT created_at, created_at_unix, id
+          FROM messages
+          WHERE conversation_id = conversations.id
+          UNION ALL
+          SELECT created_at, created_at_unix, id
+          FROM messages_archive
+          WHERE conversation_id = conversations.id
+        )
         ORDER BY created_at_unix DESC, id DESC
         LIMIT 1
-      )
+      ) AS last_message_at,
+      (
+        SELECT COUNT(*)
+        FROM (
+          SELECT id
+          FROM messages
+          WHERE conversation_id = conversations.id
+          UNION ALL
+          SELECT id
+          FROM messages_archive
+          WHERE conversation_id = conversations.id
+        )
+      ) AS message_count
+    FROM conversations
     WHERE (
       conversations.owner_clerk_user_id = ?
       OR conversations.contact_clerk_user_id = ?
     )
     AND conversations.contact_normalized_email IS NOT NULL
-    GROUP BY conversations.id
     ORDER BY conversations.updated_at_unix DESC, conversations.id DESC;
     `,
     [currentClerkUserId, currentClerkUserId],

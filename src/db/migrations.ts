@@ -150,6 +150,9 @@ async function backfillSortableTimestamps(db: SQLiteDatabase) {
 
     UPDATE messages
     SET created_at_unix = COALESCE(created_at_unix, unixepoch(created_at));
+
+    UPDATE messages_archive
+    SET created_at_unix = COALESCE(created_at_unix, unixepoch(created_at));
   `);
 }
 
@@ -163,6 +166,10 @@ async function normalizeStoredTimestampText(db: SQLiteDatabase) {
       AND updated_at IS NOT NULL;
 
     UPDATE messages
+    SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
+    WHERE created_at IS NOT NULL;
+
+    UPDATE messages_archive
     SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
     WHERE created_at IS NOT NULL;
 
@@ -231,6 +238,16 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_synced_created_at_unix
     ON messages (synced, created_at_unix ASC, id ASC);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_archive_remote_id
+    ON messages_archive (remote_id)
+    WHERE remote_id IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_messages_archive_conversation_created_at_unix
+    ON messages_archive (conversation_id, created_at_unix ASC, id ASC);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_archive_conversation_created_at_unix_desc
+    ON messages_archive (conversation_id, created_at_unix DESC, id DESC);
 
     CREATE TRIGGER IF NOT EXISTS trg_conversations_insert_sort_keys
     AFTER INSERT ON conversations
@@ -320,6 +337,21 @@ export async function runMigrations(db: SQLiteDatabase) {
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS messages_archive (
+      id INTEGER PRIMARY KEY,
+      conversation_id INTEGER NOT NULL,
+      sender_type TEXT NOT NULL CHECK (sender_type IN ('user', 'assistant', 'system')),
+      sender_clerk_user_id TEXT,
+      body TEXT NOT NULL,
+      summary TEXT,
+      remote_id TEXT,
+      sync_error TEXT,
+      synced INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      created_at_unix INTEGER,
+      FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS seed_history (
       seed_key TEXT PRIMARY KEY,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -333,6 +365,12 @@ export async function runMigrations(db: SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_created_at
     ON messages (created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_archive_conversation_id
+    ON messages_archive (conversation_id);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_archive_created_at
+    ON messages_archive (created_at);
   `);
 
   await migrateContactsToEmailSchema(db);
