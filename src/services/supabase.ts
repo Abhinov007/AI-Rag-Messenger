@@ -6,7 +6,7 @@
  */
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { env, isSupabaseConfigured } from '../config/env';
 
 
@@ -15,12 +15,23 @@ export { isSupabaseConfigured };
 
 type GetClerkToken = () => Promise<string | null>;
 
+let sharedSupabaseClient: SupabaseClient | null = null;
+let sharedGetClerkToken: GetClerkToken | undefined;
+
 export function createSupabaseClient(getClerkToken?: GetClerkToken) {
   if (!isSupabaseConfigured) {
     return null;
   }
 
-  return createClient(env.supabaseUrl, env.supabaseAnonKey, {
+  if (getClerkToken) {
+    sharedGetClerkToken = getClerkToken;
+  }
+
+  if (sharedSupabaseClient) {
+    return sharedSupabaseClient;
+  }
+
+  sharedSupabaseClient = createClient(env.supabaseUrl, env.supabaseAnonKey, {
     auth: {
       storage: AsyncStorage,
       autoRefreshToken: true,
@@ -28,11 +39,17 @@ export function createSupabaseClient(getClerkToken?: GetClerkToken) {
       detectSessionInUrl: false,
     },
     accessToken: async () => {
-      if (!getClerkToken) {
+      if (!sharedGetClerkToken) {
         return null;
       }
 
-      return getClerkToken();
+      return sharedGetClerkToken();
     },
   });
+
+  return sharedSupabaseClient;
+}
+
+export function resetSupabaseClientState() {
+  sharedGetClerkToken = undefined;
 }

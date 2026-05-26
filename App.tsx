@@ -19,6 +19,7 @@ import type { AppStackParamList } from './src/navigation/types';
 import { env } from './src/config/env';
 import { initializeDatabase } from './src/db/database';
 import SyncBootstrapper from './src/components/SyncBootstrapper';
+import { resetSupabaseClientState } from './src/services/supabase';
 
 export type AuthStackParamList = {
   Login: undefined;
@@ -71,6 +72,7 @@ function AppContent() {
   }, []);
 
   async function handleLogout() {
+    resetSupabaseClientState();
     await signOut();
   }
 
