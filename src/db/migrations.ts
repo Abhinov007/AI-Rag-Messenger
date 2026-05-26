@@ -86,6 +86,8 @@ async function migrateContactsToEmailSchema(db: SQLiteDatabase) {
  */
 async function migrateLegacySchema(db: SQLiteDatabase) {
   await ensureColumn(db, 'conversations', 'last_message', 'TEXT');
+  await ensureColumn(db, 'conversations', 'created_at_unix', 'INTEGER');
+  await ensureColumn(db, 'conversations', 'updated_at_unix', 'INTEGER');
 
   // Conversation sync fields
   await ensureColumn(db, 'conversations', 'remote_id', 'TEXT');
@@ -116,6 +118,7 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
   await ensureColumn(db, 'messages', 'summary', 'TEXT');
   await ensureColumn(db, 'messages', 'remote_id', 'TEXT');
   await ensureColumn(db, 'messages', 'sync_error', 'TEXT');
+  await ensureColumn(db, 'messages', 'created_at_unix', 'INTEGER');
   await ensureColumn(
     db,
     'messages',
@@ -136,6 +139,40 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
     'synced',
     'INTEGER NOT NULL DEFAULT 0',
   );
+}
+
+async function backfillSortableTimestamps(db: SQLiteDatabase) {
+  await db.execAsync(`
+    UPDATE conversations
+    SET
+      created_at_unix = COALESCE(created_at_unix, unixepoch(created_at)),
+      updated_at_unix = COALESCE(updated_at_unix, unixepoch(updated_at));
+
+    UPDATE messages
+    SET created_at_unix = COALESCE(created_at_unix, unixepoch(created_at));
+  `);
+}
+
+async function normalizeStoredTimestampText(db: SQLiteDatabase) {
+  await db.execAsync(`
+    UPDATE conversations
+    SET
+      created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)
+    WHERE created_at IS NOT NULL
+      AND updated_at IS NOT NULL;
+
+    UPDATE messages
+    SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
+    WHERE created_at IS NOT NULL;
+
+    UPDATE contacts
+    SET
+      created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)
+    WHERE created_at IS NOT NULL
+      AND updated_at IS NOT NULL;
+  `);
 }
 
 /**
@@ -170,12 +207,72 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_conversations_contact_user
     ON conversations (contact_clerk_user_id);
 
+    CREATE INDEX IF NOT EXISTS idx_conversations_updated_at_unix
+    ON conversations (updated_at_unix DESC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_owner_updated_at_unix
+    ON conversations (owner_clerk_user_id, updated_at_unix DESC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_contact_user_updated_at_unix
+    ON conversations (contact_clerk_user_id, updated_at_unix DESC, id DESC);
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_remote_id
     ON messages (remote_id)
     WHERE remote_id IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_messages_sender_clerk_user_id
     ON messages (sender_clerk_user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at_unix
+    ON messages (conversation_id, created_at_unix ASC, id ASC);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at_unix_desc
+    ON messages (conversation_id, created_at_unix DESC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_synced_created_at_unix
+    ON messages (synced, created_at_unix ASC, id ASC);
+
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_insert_sort_keys
+    AFTER INSERT ON conversations
+    FOR EACH ROW
+    WHEN NEW.created_at_unix IS NULL OR NEW.updated_at_unix IS NULL
+    BEGIN
+      UPDATE conversations
+      SET
+        created_at_unix = unixepoch(created_at),
+        updated_at_unix = unixepoch(updated_at)
+      WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_conversations_update_sort_keys
+    AFTER UPDATE OF created_at, updated_at ON conversations
+    FOR EACH ROW
+    BEGIN
+      UPDATE conversations
+      SET
+        created_at_unix = unixepoch(created_at),
+        updated_at_unix = unixepoch(updated_at)
+      WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_messages_insert_sort_keys
+    AFTER INSERT ON messages
+    FOR EACH ROW
+    WHEN NEW.created_at_unix IS NULL
+    BEGIN
+      UPDATE messages
+      SET created_at_unix = unixepoch(created_at)
+      WHERE id = NEW.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_messages_update_sort_keys
+    AFTER UPDATE OF created_at ON messages
+    FOR EACH ROW
+    BEGIN
+      UPDATE messages
+      SET created_at_unix = unixepoch(created_at)
+      WHERE id = NEW.id;
+    END;
   `);
 }
 
@@ -203,7 +300,9 @@ export async function runMigrations(db: SQLiteDatabase) {
       participant_key TEXT,
 
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at_unix INTEGER,
+      updated_at_unix INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -217,6 +316,7 @@ export async function runMigrations(db: SQLiteDatabase) {
       sync_error TEXT,
       synced INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at_unix INTEGER,
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
     );
 
@@ -237,5 +337,7 @@ export async function runMigrations(db: SQLiteDatabase) {
 
   await migrateContactsToEmailSchema(db);
   await migrateLegacySchema(db);
+  await normalizeStoredTimestampText(db);
+  await backfillSortableTimestamps(db);
   await createPostMigrationIndexes(db);
 }

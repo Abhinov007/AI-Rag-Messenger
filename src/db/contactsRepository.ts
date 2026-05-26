@@ -1,5 +1,6 @@
 import { getDatabase } from './database';
 import type { Contact, ContactCreateInput } from '../types/contacts';
+import { getUtcNowIsoTimestamp } from '../utils/timestamps';
 
 type ContactRow = {
   id: number;
@@ -45,6 +46,7 @@ export async function saveContactLocally(
   const name = input.name.trim();
   const email = input.email.trim();
   const normalizedEmail = normalizeEmail(email);
+  const now = getUtcNowIsoTimestamp();
 
   await db.runAsync(
     `
@@ -54,19 +56,21 @@ export async function saveContactLocally(
       name,
       email,
       normalized_email,
+      created_at,
+      updated_at,
       synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, 0, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, 0, NULL)
     ON CONFLICT(clerk_user_id, normalized_email)
     DO UPDATE SET
       name = excluded.name,
       email = excluded.email,
-      updated_at = CURRENT_TIMESTAMP,
+      updated_at = excluded.updated_at,
       synced = 0,
       sync_error = NULL;
     `,
-    [input.clerkUserId, name, email, normalizedEmail],
+    [input.clerkUserId, name, email, normalizedEmail, now, now],
   );
 
   const row = await db.getFirstAsync<ContactRow>(

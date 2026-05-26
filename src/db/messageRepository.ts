@@ -7,6 +7,10 @@ import type {
   MessageSaveInput,
   MessageSenderType,
 } from '../types/message';
+import {
+  getUtcNowIsoTimestamp,
+  normalizeUtcTimestamp,
+} from '../utils/timestamps';
 
 /**
  * Raw row shape returned by SQLite for the `messages` table.
@@ -81,6 +85,8 @@ async function touchConversationAfterMessage(
   previewBody: string,
   updatedAt?: string,
 ) {
+  const normalizedUpdatedAt = normalizeUtcTimestamp(updatedAt);
+
   if (updatedAt) {
     await db.runAsync(
       `
@@ -89,20 +95,22 @@ async function touchConversationAfterMessage(
           last_message = ?
       WHERE id = ?;
       `,
-      [updatedAt, previewBody, conversationId],
+      [normalizedUpdatedAt ?? updatedAt, previewBody, conversationId],
     );
 
     return;
   }
 
+  const nextUpdatedAt = getUtcNowIsoTimestamp();
+
   await db.runAsync(
     `
     UPDATE conversations
-    SET updated_at = CURRENT_TIMESTAMP,
+    SET updated_at = ?,
         last_message = ?
     WHERE id = ?;
     `,
-    [previewBody, conversationId],
+    [nextUpdatedAt, previewBody, conversationId],
   );
 }
 
@@ -117,6 +125,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
   const summary = message.summary ?? null;
   const synced = message.synced ? 1 : 0;
   const senderClerkUserId = message.senderClerkUserId ?? null;
+  const createdAt = normalizeUtcTimestamp(message.createdAt) ?? getUtcNowIsoTimestamp();
 
   if (message.id != null && message.id > 0) {
     await db.runAsync(
@@ -153,10 +162,11 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       sender_clerk_user_id,
       body,
       summary,
+      created_at,
       synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, ?, ?, NULL);
+    VALUES (?, ?, ?, ?, ?, ?, ?, NULL);
     `,
     [
       message.conversationId,
@@ -164,6 +174,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       senderClerkUserId,
       body,
       summary,
+      createdAt,
       synced,
     ],
   );
@@ -204,7 +215,7 @@ export async function getMessagesByConversationId(
   const rows = await db.getAllAsync<MessageRow>(
     `
     ${scoped.query}
-    ORDER BY datetime(created_at) ASC, id ASC;
+    ORDER BY created_at_unix ASC, id ASC;
     `,
     [conversationId, ...scoped.params],
   );
@@ -249,8 +260,8 @@ export async function getMessagePageByConversationId({
     beforeCreatedAt && beforeId != null
       ? `
         AND (
-          datetime(created_at) < datetime(?)
-          OR (datetime(created_at) = datetime(?) AND id < ?)
+          created_at_unix < unixepoch(?)
+          OR (created_at_unix = unixepoch(?) AND id < ?)
         )
       `
       : '';
@@ -268,7 +279,7 @@ export async function getMessagePageByConversationId({
     `
     ${scoped.query}
     ${cursorClause}
-    ORDER BY datetime(created_at) DESC, id DESC
+    ORDER BY created_at_unix DESC, id DESC
     LIMIT ?;
     `,
     params,
@@ -344,7 +355,7 @@ export async function getUnsyncedMessages(
   const rows = await db.getAllAsync<MessageRow>(
     `
     ${scoped.query}
-    ORDER BY datetime(created_at) ASC, id ASC;
+    ORDER BY created_at_unix ASC, id ASC;
     `,
     scoped.params,
   );
@@ -370,7 +381,7 @@ export async function getLatestRemoteMessageCreatedAt(
   const row = await db.getFirstAsync<{ created_at: string }>(
     `
     ${scoped.query}
-    ORDER BY datetime(created_at) DESC, id DESC
+    ORDER BY created_at_unix DESC, id DESC
     LIMIT 1;
     `,
     [conversationId, ...scoped.params],
@@ -399,6 +410,7 @@ export async function addMessage(
 ) {
   const db = await getDatabase();
   const trimmedBody = body.trim();
+  const createdAt = getUtcNowIsoTimestamp();
 
   const result = await db.runAsync(
     `
@@ -407,16 +419,18 @@ export async function addMessage(
       sender_type,
       sender_clerk_user_id,
       body,
+      created_at,
       synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, 0, NULL);
+    VALUES (?, ?, ?, ?, ?, 0, NULL);
     `,
     [
       conversationId,
       senderType,
       senderClerkUserId ?? null,
       trimmedBody,
+      createdAt,
     ],
   );
 
@@ -523,6 +537,7 @@ export async function upsertRemoteMessageLocally({
   createdAt: string;
 }) {
   const db = await getDatabase();
+  const normalizedCreatedAt = normalizeUtcTimestamp(createdAt) ?? createdAt;
 
   const existing = await db.getFirstAsync<{ id: number }>(
     `
@@ -543,6 +558,7 @@ export async function upsertRemoteMessageLocally({
           sender_clerk_user_id = ?,
           body = ?,
           summary = ?,
+          created_at = ?,
           synced = 1,
           sync_error = NULL
       WHERE id = ?;
@@ -553,11 +569,17 @@ export async function upsertRemoteMessageLocally({
         senderClerkUserId ?? null,
         body,
         summary ?? null,
+        normalizedCreatedAt,
         existing.id,
       ],
     );
 
-    await touchConversationAfterMessage(db, conversationId, body, createdAt);
+    await touchConversationAfterMessage(
+      db,
+      conversationId,
+      body,
+      normalizedCreatedAt,
+    );
 
     return existing.id;
   }
@@ -585,11 +607,16 @@ export async function upsertRemoteMessageLocally({
       body,
       summary ?? null,
       remoteId,
-      createdAt,
+      normalizedCreatedAt,
     ],
   );
 
-  await touchConversationAfterMessage(db, conversationId, body, createdAt);
+  await touchConversationAfterMessage(
+    db,
+    conversationId,
+    body,
+    normalizedCreatedAt,
+  );
 
   return Number(result.lastInsertRowId);
 }

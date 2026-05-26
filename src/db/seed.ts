@@ -6,6 +6,7 @@
  * running more than once.
  */
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { getUtcNowIsoTimestamp } from '../utils/timestamps';
 
 /**
  * Inserts three dummy conversations and their messages only once.
@@ -86,9 +87,12 @@ export async function seedDummyConversations(db: SQLiteDatabase) {
 }
 
 async function createSeedConversation(db: SQLiteDatabase, title: string) {
+  const now = getUtcNowIsoTimestamp();
   const result = await db.runAsync(
-    'INSERT INTO conversations (title) VALUES (?);',
+    'INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?);',
     title,
+    now,
+    now,
   );
 
   return result.lastInsertRowId;
@@ -100,22 +104,25 @@ async function createSeedMessage(
   senderType: 'user' | 'assistant' | 'system',
   body: string,
 ) {
+  const now = getUtcNowIsoTimestamp();
   await db.runAsync(
     `
-    INSERT INTO messages (conversation_id, sender_type, body, synced)
-    VALUES (?, ?, ?, 1);
+    INSERT INTO messages (conversation_id, sender_type, body, synced, created_at)
+    VALUES (?, ?, ?, 1, ?);
     `,
     conversationId,
     senderType,
     body,
+    now,
   );
 
   await db.runAsync(
     `
     UPDATE conversations
-    SET updated_at = CURRENT_TIMESTAMP
+    SET updated_at = ?
     WHERE id = ?;
     `,
+    now,
     conversationId,
   );
 }

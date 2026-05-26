@@ -10,6 +10,10 @@ import type {
   ConversationCreateInput,
   ConversationListItem,
 } from '../types/conversation';
+import {
+  getUtcNowIsoTimestamp,
+  normalizeUtcTimestamp,
+} from '../utils/timestamps';
 
 type ConversationRow = {
   id: number;
@@ -93,6 +97,7 @@ export async function createConversation(
   conversation: ConversationCreateInput,
 ): Promise<number> {
   const db = await getDatabase();
+  const createdAt = getUtcNowIsoTimestamp();
 
   const result = await db.runAsync(
     `
@@ -105,10 +110,12 @@ INSERT INTO conversations
   contact_normalized_email,
   contact_clerk_user_id,
   participant_key,
+  created_at,
+  updated_at,
   synced,
   sync_error
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL);
     `,
     [
       conversation.title?.trim() || null,
@@ -118,6 +125,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL);
       conversation.contactNormalizedEmail?.trim().toLowerCase() || null,
       conversation.contactClerkUserId || null,
       conversation.participantKey || null,
+      createdAt,
+      createdAt,
     ],
   );
 
@@ -155,7 +164,7 @@ export async function getConversations(
         SELECT id
         FROM messages
         WHERE conversation_id = conversations.id
-        ORDER BY datetime(created_at) DESC, id DESC
+        ORDER BY created_at_unix DESC, id DESC
         LIMIT 1
       )
     WHERE (
@@ -164,7 +173,7 @@ export async function getConversations(
     )
     AND conversations.contact_normalized_email IS NOT NULL
     GROUP BY conversations.id
-    ORDER BY datetime(conversations.updated_at) DESC, conversations.id DESC;
+    ORDER BY conversations.updated_at_unix DESC, conversations.id DESC;
     `,
     [currentClerkUserId, currentClerkUserId],
   );
@@ -324,7 +333,7 @@ export async function getUnsyncedConversations(
   const rows = await db.getAllAsync<ConversationRow>(
     `
     ${scoped.query}
-    ORDER BY datetime(created_at) ASC, id ASC;
+    ORDER BY created_at_unix ASC, id ASC;
     `,
     scoped.params,
   );
@@ -372,16 +381,17 @@ export async function updateConversationLastMessage(
   lastMessage: string,
 ) {
   const db = await getDatabase();
+  const updatedAt = getUtcNowIsoTimestamp();
 
   await db.runAsync(
     `
     UPDATE conversations
     SET last_message = ?,
-        updated_at = CURRENT_TIMESTAMP,
+        updated_at = ?,
         synced = 0
     WHERE id = ?;
     `,
-    [lastMessage.trim(), conversationId],
+    [lastMessage.trim(), updatedAt, conversationId],
   );
 }
 
@@ -390,16 +400,17 @@ export async function renameConversation(
   title: string,
 ) {
   const db = await getDatabase();
+  const updatedAt = getUtcNowIsoTimestamp();
 
   await db.runAsync(
     `
     UPDATE conversations
     SET title = ?,
-        updated_at = CURRENT_TIMESTAMP,
+        updated_at = ?,
         synced = 0
     WHERE id = ?;
     `,
-    [title.trim(), conversationId],
+    [title.trim(), updatedAt, conversationId],
   );
 }
 
@@ -449,6 +460,8 @@ export async function upsertPulledConversation({
   updatedAt: string;
 }) {
   const db = await getDatabase();
+  const normalizedCreatedAt = normalizeUtcTimestamp(createdAt) ?? createdAt;
+  const normalizedUpdatedAt = normalizeUtcTimestamp(updatedAt) ?? updatedAt;
 
   const existingByRemoteId = await db.getFirstAsync<{ id: number }>(
     `
@@ -472,6 +485,7 @@ export async function upsertPulledConversation({
           contact_clerk_user_id = ?,
           synced = 1,
           sync_error = NULL,
+          created_at = ?,
           updated_at = ?
       WHERE id = ?;
       `,
@@ -482,7 +496,8 @@ export async function upsertPulledConversation({
         contactEmail,
         contactNormalizedEmail,
         contactClerkUserId,
-        updatedAt,
+        normalizedCreatedAt,
+        normalizedUpdatedAt,
         existingByRemoteId.id,
       ],
     );
@@ -525,6 +540,7 @@ export async function upsertPulledConversation({
           contact_clerk_user_id = ?,
           synced = 1,
           sync_error = NULL,
+          created_at = ?,
           updated_at = ?
       WHERE id = ?;
       `,
@@ -536,7 +552,8 @@ export async function upsertPulledConversation({
         contactEmail,
         contactNormalizedEmail,
         contactClerkUserId,
-        updatedAt,
+        normalizedCreatedAt,
+        normalizedUpdatedAt,
         existingBetweenUsers.id,
       ],
     );
@@ -570,8 +587,8 @@ export async function upsertPulledConversation({
       contactEmail,
       contactNormalizedEmail,
       contactClerkUserId,
-      createdAt,
-      updatedAt,
+      normalizedCreatedAt,
+      normalizedUpdatedAt,
     ],
   );
 
