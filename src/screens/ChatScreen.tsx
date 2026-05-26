@@ -34,7 +34,10 @@ import {
   summarizeRecentMessages,
 } from '../ai/mockAssistant';
 import { getConversationById } from '../db/conversationRepository';
-import { addMessage, getMessagesByConversationId } from '../db/messageRepository';
+import {
+  addMessage,
+  getMessagePageByConversationId,
+} from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteMessagesForConversation } from '../services/messagePull';
 import { subscribeToConversationMessages } from '../services/messageRealtime';
@@ -50,6 +53,8 @@ type Props = {
   route: ChatRoute;
 };
 
+const MESSAGE_PAGE_SIZE = 50;
+
 export default function ChatScreen({ navigation, route }: Props) {
   const { conversationId, title: titleParam } = route.params;
   const { userId, getToken } = useAuth();
@@ -62,6 +67,8 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [retryingMessageId, setRetryingMessageId] = useState<number | null>(
     null,
   );
@@ -111,13 +118,43 @@ export default function ChatScreen({ navigation, route }: Props) {
     setTitle(conversation.title ?? 'Chat');
     setError('');
 
-    const rows = await getMessagesByConversationId(
+    const page = await getMessagePageByConversationId({
       conversationId,
-      userId ?? undefined,
-    );
-    setMessages(rows);
+      currentClerkUserId: userId ?? undefined,
+      limit: MESSAGE_PAGE_SIZE,
+    });
+
+    setMessages(page.messages);
+    setHasOlderMessages(page.hasMore);
 
     return conversation;
+  }
+
+  async function handleLoadOlderMessages() {
+    if (isLoadingOlder || !hasOlderMessages || messages.length === 0) {
+      return;
+    }
+
+    const oldestMessage = messages[0];
+
+    setIsLoadingOlder(true);
+
+    try {
+      const page = await getMessagePageByConversationId({
+        conversationId,
+        currentClerkUserId: userId ?? undefined,
+        limit: MESSAGE_PAGE_SIZE,
+        beforeCreatedAt: oldestMessage.createdAt,
+        beforeId: oldestMessage.id,
+      });
+
+      setMessages((currentMessages) => [...page.messages, ...currentMessages]);
+      setHasOlderMessages(page.hasMore);
+    } catch (loadOlderError) {
+      console.warn('Could not load older messages:', loadOlderError);
+    } finally {
+      setIsLoadingOlder(false);
+    }
   }
 
   async function syncCurrentChat(options?: { showIndicator?: boolean }) {
@@ -503,6 +540,20 @@ export default function ChatScreen({ navigation, route }: Props) {
                 </View>
               );
             }}
+            ListHeaderComponent={
+              hasOlderMessages ? (
+                <TouchableOpacity
+                  activeOpacity={0.82}
+                  disabled={isLoadingOlder}
+                  onPress={handleLoadOlderMessages}
+                  style={styles.loadOlderButton}
+                >
+                  <Text style={styles.loadOlderLabel}>
+                    {isLoadingOlder ? 'Loading older messages...' : 'Load older messages'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null
+            }
             ListEmptyComponent={
               <Text style={styles.emptyThread}>
                 No messages yet. Pull down to refresh or say hello below.
@@ -801,6 +852,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 24,
     textAlign: 'center',
+  },
+  loadOlderButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  loadOlderLabel: {
+    color: '#A6BBB1',
+    fontSize: 13,
+    fontWeight: '800',
   },
   composer: {
     alignItems: 'flex-end',

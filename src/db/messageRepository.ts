@@ -24,6 +24,11 @@ type MessageRow = {
   created_at: string;
 };
 
+export type MessagePage = {
+  messages: Message[];
+  hasMore: boolean;
+};
+
 /**
  * Converts snake_case SQLite columns into the camelCase app type.
  */
@@ -205,6 +210,77 @@ export async function getMessagesByConversationId(
   );
 
   return rows.map(mapMessage);
+}
+
+export async function getMessagePageByConversationId({
+  conversationId,
+  currentClerkUserId,
+  limit,
+  beforeCreatedAt,
+  beforeId,
+}: {
+  conversationId: number;
+  currentClerkUserId?: string;
+  limit: number;
+  beforeCreatedAt?: string;
+  beforeId?: number;
+}): Promise<MessagePage> {
+  const db = await getDatabase();
+  const scoped = applyMessageAccessScope(
+    `
+    SELECT
+      id,
+      conversation_id,
+      sender_type,
+      sender_clerk_user_id,
+      body,
+      summary,
+      remote_id,
+      sync_error,
+      synced,
+      created_at
+    FROM messages
+    WHERE conversation_id = ?
+    `,
+    currentClerkUserId,
+  );
+
+  const cursorClause =
+    beforeCreatedAt && beforeId != null
+      ? `
+        AND (
+          datetime(created_at) < datetime(?)
+          OR (datetime(created_at) = datetime(?) AND id < ?)
+        )
+      `
+      : '';
+
+  const fetchLimit = limit + 1;
+  const params: Array<string | number> = [conversationId, ...scoped.params];
+
+  if (beforeCreatedAt && beforeId != null) {
+    params.push(beforeCreatedAt, beforeCreatedAt, beforeId);
+  }
+
+  params.push(fetchLimit);
+
+  const rows = await db.getAllAsync<MessageRow>(
+    `
+    ${scoped.query}
+    ${cursorClause}
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT ?;
+    `,
+    params,
+  );
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+  return {
+    messages: pageRows.reverse().map(mapMessage),
+    hasMore,
+  };
 }
 
 export async function getMessageById(
