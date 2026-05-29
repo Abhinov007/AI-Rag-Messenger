@@ -44,7 +44,7 @@ The app follows a robust offline-first architecture:
 ### 2. Installation
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/AI-Rag-Messenger.git
+git clone https://github.com/Abhinov007/AI-Rag-Messenger.git
 
 # Install mobile dependencies
 npm install
