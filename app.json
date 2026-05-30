@@ -37,7 +37,7 @@
         {
           "enableEntitlements": false,
           "forceCxx20": true,
-          "enableOpenCL": false
+          "enableOpenCLAndHexagon": false
         }
       ]
     ]
