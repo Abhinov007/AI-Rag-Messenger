@@ -29,10 +29,8 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
-import {
-  suggestRepliesForRecentMessages,
-  summarizeRecentMessages,
-} from '../ai/mockAssistant';
+import { suggestRepliesForRecentMessages } from '../ai/mockAssistant';
+import { summarizeRecentMessages } from '../ai/localLlamaAssistant';
 import { getConversationById } from '../db/conversationRepository';
 import {
   addMessage,
