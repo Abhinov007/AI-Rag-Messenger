@@ -1,15 +1,9 @@
-import * as FileSystem from 'expo-file-system/legacy';
-import { initLlama } from 'llama.rn';
-
 import type { Message } from '../types/message';
-
-type LocalLlamaContext = Awaited<ReturnType<typeof initLlama>>;
+import { getLocalLlamaContext } from './localAiModel';
 
 export type ReplySuggestionResult = {
   suggestions: string[];
 };
-
-const MODEL_FILE_NAME = 'Llama-3.2-1B-Instruct-Q4_K_M.gguf';
 
 const STOP_WORDS = [
   '</s>',
@@ -23,8 +17,6 @@ const STOP_WORDS = [
   '<|endoftext|>',
 ];
 
-const MODEL_CONTEXT_SIZE = 2048;
-
 const MAX_MESSAGES_FOR_SUMMARY = 24;
 const MAX_SUMMARY_MESSAGE_LENGTH = 420;
 const MAX_SUMMARY_TRANSCRIPT_CHARACTERS = 5200;
@@ -34,47 +26,7 @@ const MAX_REPLY_MESSAGE_LENGTH = 320;
 const MAX_REPLY_TRANSCRIPT_CHARACTERS = 3600;
 const MAX_SUGGESTION_LENGTH = 120;
 
-let contextPromise: Promise<LocalLlamaContext> | null = null;
 let generationQueue: Promise<unknown> = Promise.resolve();
-
-function getModelPath(): string {
-  if (!FileSystem.documentDirectory) {
-    throw new Error('Local AI storage directory is unavailable.');
-  }
-
-  return `${FileSystem.documentDirectory}${MODEL_FILE_NAME}`;
-}
-
-async function getLocalLlamaContext(): Promise<LocalLlamaContext> {
-  if (contextPromise) {
-    return contextPromise;
-  }
-
-  contextPromise = (async () => {
-    const modelPath = getModelPath();
-    const fileInfo = await FileSystem.getInfoAsync(modelPath);
-
-    if (!fileInfo.exists) {
-      throw new Error(
-        'Local AI model is not downloaded. Open the Local AI setup screen first.',
-      );
-    }
-
-    return initLlama({
-      model: modelPath,
-      use_mlock: false,
-      n_ctx: MODEL_CONTEXT_SIZE,
-      n_batch: 128,
-      n_threads: 4,
-      n_gpu_layers: 0,
-    });
-  })().catch((error) => {
-    contextPromise = null;
-    throw error;
-  });
-
-  return contextPromise;
-}
 
 /**
  * The shared Llama context should run only one generation request at a time.
@@ -330,11 +282,7 @@ export async function suggestRepliesForRecentMessages(
   messages: Message[],
   currentClerkUserId: string | null | undefined,
 ): Promise<ReplySuggestionResult> {
-  const transcript = createReplyTranscript(
-    title,
-    messages,
-    currentClerkUserId,
-  );
+  const transcript = createReplyTranscript(title, messages, currentClerkUserId);
 
   if (!transcript) {
     return {

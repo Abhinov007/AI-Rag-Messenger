@@ -10,6 +10,7 @@ import { useAuth } from '@clerk/expo';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   FlatList,
   KeyboardAvoidingView,
@@ -29,6 +30,10 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
+import {
+  isLocalAiModelInstalled,
+  LOCAL_AI_NOT_INSTALLED_MESSAGE,
+} from '../ai/localAiModel';
 import {
   suggestRepliesForRecentMessages,
   summarizeRecentMessages,
@@ -107,7 +112,10 @@ export default function ChatScreen({ navigation, route }: Props) {
   }
 
   async function loadThread() {
-    const conversation = await getConversationById(conversationId, userId ?? undefined);
+    const conversation = await getConversationById(
+      conversationId,
+      userId ?? undefined,
+    );
 
     if (!conversation) {
       setError('Conversation not found.');
@@ -184,7 +192,10 @@ export default function ChatScreen({ navigation, route }: Props) {
         try {
           await syncPendingMessages(userId, getClerkToken);
         } catch (syncError) {
-          console.warn('Pending message sync failed. Will retry later:', syncError);
+          console.warn(
+            'Pending message sync failed. Will retry later:',
+            syncError,
+          );
         }
       }
 
@@ -218,13 +229,13 @@ export default function ChatScreen({ navigation, route }: Props) {
 
   async function handleRefresh() {
     setIsRefreshing(true);
-  
+
     try {
       await loadThread();
       await syncCurrentChat({ showIndicator: false });
     } catch (refreshError) {
       console.warn('Chat refresh failed:', refreshError);
-  
+
       try {
         await loadThread();
       } catch (localRefreshError) {
@@ -256,13 +267,13 @@ export default function ChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     let cancelled = false;
     let channel: any = null;
-  
+
     async function setupThread() {
       setIsLoading(true);
       setError('');
-  
+
       let conversation: Awaited<ReturnType<typeof loadThread>> = null;
-  
+
       /*
        * Step 1: Load locally cached SQLite messages first.
        * This must work even when the phone has no internet connection.
@@ -271,11 +282,11 @@ export default function ChatScreen({ navigation, route }: Props) {
         conversation = await loadThread();
       } catch (localLoadError) {
         console.warn('Local chat load failed:', localLoadError);
-  
+
         if (!cancelled) {
           setError('Could not load saved chat messages.');
         }
-  
+
         return;
       } finally {
         /*
@@ -286,21 +297,21 @@ export default function ChatScreen({ navigation, route }: Props) {
           setIsLoading(false);
         }
       }
-  
+
       if (cancelled || !conversation || !userId || !conversation.remoteId) {
         return;
       }
-  
+
       /*
        * Step 2: Start realtime subscription independently of the initial
        * remote pull. When offline, Supabase can reconnect later.
        */
       const subscriptionKey = `${conversationId}:${conversation.remoteId}:${userId}`;
-  
+
       if (subscriptionKeyRef.current !== subscriptionKey) {
         try {
           subscriptionKeyRef.current = subscriptionKey;
-  
+
           channel = subscribeToConversationMessages({
             localConversationId: conversationId,
             remoteConversationId: conversation.remoteId,
@@ -320,20 +331,20 @@ export default function ChatScreen({ navigation, route }: Props) {
           );
         }
       }
-  
+
       /*
        * Step 3: Sync in the background.
        * Do not await this before showing locally saved messages.
        */
       void syncCurrentChat({ showIndicator: false });
     }
-  
+
     setupThread();
-  
+
     return () => {
       cancelled = true;
       subscriptionKeyRef.current = null;
-  
+
       if (channel) {
         channel.unsubscribe();
       }
@@ -345,11 +356,14 @@ export default function ChatScreen({ navigation, route }: Props) {
       return;
     }
 
-    const appStateSubscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        syncCurrentChat({ showIndicator: true });
-      }
-    });
+    const appStateSubscription = AppState.addEventListener(
+      'change',
+      (state) => {
+        if (state === 'active') {
+          syncCurrentChat({ showIndicator: true });
+        }
+      },
+    );
 
     const intervalId = setInterval(() => {
       syncCurrentChat({ showIndicator: false });
@@ -381,7 +395,10 @@ export default function ChatScreen({ navigation, route }: Props) {
         try {
           await syncMessageById(messageId, userId, getClerkToken);
         } catch (syncError) {
-          console.warn('Message saved locally but sync failed. Will retry later:', syncError);
+          console.warn(
+            'Message saved locally but sync failed. Will retry later:',
+            syncError,
+          );
         }
       }
 
@@ -397,16 +414,18 @@ export default function ChatScreen({ navigation, route }: Props) {
 
   async function handleSummarizeChat() {
     setIsAiMenuVisible(false);
+
+    if (!(await isLocalAiModelInstalled())) {
+      Alert.alert('Local AI setup needed', LOCAL_AI_NOT_INSTALLED_MESSAGE);
+      return;
+    }
+
     setIsGeneratingAi(true);
     setSummaryText('');
-  
+
     try {
-      const result = await summarizeRecentMessages(
-        title,
-        messages,
-        userId,
-      );
-  
+      const result = await summarizeRecentMessages(title, messages, userId);
+
       setSummaryText(result);
       setIsSummaryVisible(true);
     } catch (summaryError) {
@@ -417,19 +436,25 @@ export default function ChatScreen({ navigation, route }: Props) {
       setIsGeneratingAi(false);
     }
   }
-  
+
   async function handleSuggestReplies() {
     setIsAiMenuVisible(false);
+
+    if (!(await isLocalAiModelInstalled())) {
+      Alert.alert('Local AI setup needed', LOCAL_AI_NOT_INSTALLED_MESSAGE);
+      return;
+    }
+
     setIsGeneratingAi(true);
     setReplySuggestions([]);
-  
+
     try {
       const result = await suggestRepliesForRecentMessages(
         title,
         messages,
         userId,
       );
-  
+
       setReplySuggestions(result.suggestions);
       setIsReplyModalVisible(true);
     } catch (suggestionError) {
@@ -480,7 +505,9 @@ export default function ChatScreen({ navigation, route }: Props) {
             {title}
           </Text>
 
-          {isSyncing ? <Text style={styles.syncingText}>Syncing...</Text> : null}
+          {isSyncing ? (
+            <Text style={styles.syncingText}>Syncing...</Text>
+          ) : null}
         </View>
 
         <TouchableOpacity
@@ -497,11 +524,11 @@ export default function ChatScreen({ navigation, route }: Props) {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         style={styles.flex}
       >
-      {isLoading && messages.length === 0 ? (
-        <View style={styles.centered}>
-          <ActivityIndicator color="#25D366" />
-        </View>
-            ) : error && messages.length === 0 ? (
+        {isLoading && messages.length === 0 ? (
+          <View style={styles.centered}>
+            <ActivityIndicator color="#25D366" />
+          </View>
+        ) : error && messages.length === 0 ? (
           <View style={styles.centered}>
             <Text style={styles.errorText}>{error}</Text>
           </View>
@@ -513,7 +540,9 @@ export default function ChatScreen({ navigation, route }: Props) {
             extraData={`${messages.length}-${userId ?? ''}-${retryingMessageId ?? ''}`}
             keyExtractor={(item) => String(item.id)}
             keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            keyboardDismissMode={
+              Platform.OS === 'ios' ? 'interactive' : 'on-drag'
+            }
             onContentSizeChange={() => scrollToBottom(false)}
             onLayout={() => scrollToBottom(false)}
             refreshControl={
@@ -567,7 +596,9 @@ export default function ChatScreen({ navigation, route }: Props) {
                       {statusText ? (
                         item.syncError ? (
                           <Pressable onPress={() => handleRetryMessage(item)}>
-                            <Text style={styles.failedStatus}>{statusText}</Text>
+                            <Text style={styles.failedStatus}>
+                              {statusText}
+                            </Text>
                           </Pressable>
                         ) : (
                           <Text style={styles.messageStatus}>{statusText}</Text>
@@ -587,7 +618,9 @@ export default function ChatScreen({ navigation, route }: Props) {
                   style={styles.loadOlderButton}
                 >
                   <Text style={styles.loadOlderLabel}>
-                    {isLoadingOlder ? 'Loading older messages...' : 'Load older messages'}
+                    {isLoadingOlder
+                      ? 'Loading older messages...'
+                      : 'Load older messages'}
                   </Text>
                 </TouchableOpacity>
               ) : null
@@ -714,7 +747,8 @@ export default function ChatScreen({ navigation, route }: Props) {
           <View style={styles.resultCard}>
             <Text style={styles.modalTitle}>AI Reply Suggestions</Text>
             <Text style={styles.modalSubtitle}>
-              Tap a suggestion to fill the message box. You can edit before sending.
+              Tap a suggestion to fill the message box. You can edit before
+              sending.
             </Text>
 
             {replySuggestions.map((suggestion, index) => (
@@ -744,7 +778,9 @@ export default function ChatScreen({ navigation, route }: Props) {
         <View pointerEvents="none" style={styles.aiLoadingOverlay}>
           <View style={styles.aiLoadingCard}>
             <ActivityIndicator color="#25D366" />
-            <Text style={styles.aiLoadingText}>AI is preparing a response...</Text>
+            <Text style={styles.aiLoadingText}>
+              AI is preparing a response...
+            </Text>
           </View>
         </View>
       ) : null}

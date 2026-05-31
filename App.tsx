@@ -14,6 +14,8 @@ import SignupScreen from './src/screens/SignupScreen';
 import ChatListScreen from './src/screens/ChatListScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import AddContactScreen from './src/screens/AddContactScreen';
+import LocalAISettingsScreen from './src/screens/LocalAISettingsScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 
 import type { AppStackParamList } from './src/navigation/types';
 import { env } from './src/config/env';
@@ -101,9 +103,13 @@ function AppContent() {
 
               <AppStack.Screen name="Chat" component={ChatScreen} />
 
+              <AppStack.Screen name="AddContact" component={AddContactScreen} />
+
+              <AppStack.Screen name="Settings" component={SettingsScreen} />
+
               <AppStack.Screen
-                name="AddContact"
-                component={AddContactScreen}
+                name="LocalAISettings"
+                component={LocalAISettingsScreen}
               />
             </AppStack.Navigator>
           ) : (

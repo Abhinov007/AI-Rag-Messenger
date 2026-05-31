@@ -88,6 +88,11 @@ export default function ChatListScreen({ onLogout }: Props) {
     navigation.navigate('AddContact');
   }, [navigation]);
 
+  const handleOpenSettings = useCallback(() => {
+    Keyboard.dismiss();
+    navigation.navigate('Settings');
+  }, [navigation]);
+
   useFocusEffect(
     useCallback(() => {
       let isMounted = true;
@@ -183,6 +188,18 @@ export default function ChatListScreen({ onLogout }: Props) {
         </View>
 
         <View style={styles.headerActions}>
+          <Pressable
+            accessibilityLabel="Open settings"
+            accessibilityRole="button"
+            onPress={handleOpenSettings}
+            style={({ pressed }) => [
+              styles.settingsButton,
+              pressed && styles.settingsButtonPressed,
+            ]}
+          >
+            <Text style={styles.settingsIcon}>⚙</Text>
+          </Pressable>
+
           <Pressable
             accessibilityLabel="Add contact"
             accessibilityRole="button"
@@ -335,6 +352,25 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: '900',
     lineHeight: 28,
+  },
+  settingsButton: {
+    alignItems: 'center',
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 22,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  settingsButtonPressed: {
+    opacity: 0.72,
+  },
+  settingsIcon: {
+    color: '#D9FFF0',
+    fontSize: 21,
+    fontWeight: '900',
+    lineHeight: 24,
   },
   listContent: {
     paddingHorizontal: 16,
