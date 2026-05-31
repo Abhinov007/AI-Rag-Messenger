@@ -371,9 +371,14 @@ export default function ChatScreen({ navigation, route }: Props) {
     setIsAiMenuVisible(false);
     setIsGeneratingAi(true);
     setSummaryText('');
-
+  
     try {
-      const result = await summarizeRecentMessages(title, messages);
+      const result = await summarizeRecentMessages(
+        title,
+        messages,
+        userId,
+      );
+  
       setSummaryText(result);
       setIsSummaryVisible(true);
     } catch (summaryError) {
@@ -384,14 +389,19 @@ export default function ChatScreen({ navigation, route }: Props) {
       setIsGeneratingAi(false);
     }
   }
-
+  
   async function handleSuggestReplies() {
     setIsAiMenuVisible(false);
     setIsGeneratingAi(true);
     setReplySuggestions([]);
-
+  
     try {
-      const result = await suggestRepliesForRecentMessages(messages);
+      const result = await suggestRepliesForRecentMessages(
+        title,
+        messages,
+        userId,
+      );
+  
       setReplySuggestions(result.suggestions);
       setIsReplyModalVisible(true);
     } catch (suggestionError) {

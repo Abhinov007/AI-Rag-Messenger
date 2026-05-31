@@ -77,9 +77,8 @@ async function getLocalLlamaContext(): Promise<LocalLlamaContext> {
 }
 
 /**
- * llama.rn should handle one generation request at a time on this shared
- * context. This queue prevents Summary and Suggested Reply actions from
- * executing concurrently.
+ * The shared Llama context should run only one generation request at a time.
+ * This prevents summary and reply generation from executing simultaneously.
  */
 async function runGenerationTask<T>(task: () => Promise<T>): Promise<T> {
   const nextTask = generationQueue.then(task, task);
@@ -96,8 +95,35 @@ function normalizeBody(body: string, maxLength: number): string {
   return body.trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
+/**
+ * A human sender cannot be identified through senderType because both
+ * participants are stored as "user". Use Clerk user IDs instead.
+ */
+function getSpeakerLabel(
+  message: Message,
+  currentClerkUserId: string | null | undefined,
+  otherSpeakerName: string,
+): string {
+  if (message.senderClerkUserId && currentClerkUserId) {
+    return message.senderClerkUserId === currentClerkUserId
+      ? 'Me'
+      : otherSpeakerName;
+  }
+
+  if (message.senderType === 'assistant') {
+    return 'Assistant';
+  }
+
+  /*
+   * Old/local messages without senderClerkUserId cannot be identified safely.
+   * Never label them as "Me" automatically.
+   */
+  return 'Unknown sender';
+}
+
 function buildTranscript(
   messages: Message[],
+  currentClerkUserId: string | null | undefined,
   otherSpeakerName: string,
   maxMessages: number,
   maxMessageLength: number,
@@ -111,13 +137,18 @@ function buildTranscript(
   let characterCount = 0;
 
   /*
-   * Walk backwards so that the newest messages are retained first if the
-   * context limit is reached, then unshift to preserve chronological order.
+   * Walk backwards to retain the newest messages if the context limit is
+   * reached, then unshift them to preserve chronological order.
    */
   for (let index = recentMessages.length - 1; index >= 0; index -= 1) {
     const message = recentMessages[index];
-    const speaker =
-      message.senderType === 'user' ? 'Me' : otherSpeakerName;
+
+    const speaker = getSpeakerLabel(
+      message,
+      currentClerkUserId,
+      otherSpeakerName,
+    );
+
     const body = normalizeBody(message.body, maxMessageLength);
     const line = `${speaker}: ${body}`;
 
@@ -135,9 +166,14 @@ function buildTranscript(
   return selectedLines.join('\n');
 }
 
-function createSummaryTranscript(title: string, messages: Message[]): string {
+function createSummaryTranscript(
+  title: string,
+  messages: Message[],
+  currentClerkUserId: string | null | undefined,
+): string {
   return buildTranscript(
     messages,
+    currentClerkUserId,
     title,
     MAX_MESSAGES_FOR_SUMMARY,
     MAX_SUMMARY_MESSAGE_LENGTH,
@@ -145,10 +181,15 @@ function createSummaryTranscript(title: string, messages: Message[]): string {
   );
 }
 
-function createReplyTranscript(messages: Message[]): string {
+function createReplyTranscript(
+  title: string,
+  messages: Message[],
+  currentClerkUserId: string | null | undefined,
+): string {
   return buildTranscript(
     messages,
-    'Other person',
+    currentClerkUserId,
+    title,
     MAX_MESSAGES_FOR_REPLIES,
     MAX_REPLY_MESSAGE_LENGTH,
     MAX_REPLY_TRANSCRIPT_CHARACTERS,
@@ -179,7 +220,7 @@ function parseReplySuggestions(rawText: string): string[] {
 
   /*
    * Small models sometimes return numbered responses on a single line.
-   * Try an additional split before accepting fewer suggestions.
+   * Try another split before accepting fewer suggestions.
    */
   const inlineNumberedReplies = rawText
     .split(/(?=\s*\d+[.)]\s+)/)
@@ -201,14 +242,30 @@ function parseReplySuggestions(rawText: string): string[] {
 export async function summarizeRecentMessages(
   title: string,
   messages: Message[],
+  currentClerkUserId: string | null | undefined,
 ): Promise<string> {
-  const transcript = createSummaryTranscript(title, messages);
+  const transcript = createSummaryTranscript(
+    title,
+    messages,
+    currentClerkUserId,
+  );
 
   if (!transcript) {
     return `There are no messages in this chat with ${title} to summarize yet.`;
   }
 
   if (__DEV__) {
+    console.log(
+      'Summary sender debug:',
+      messages.slice(-MAX_MESSAGES_FOR_SUMMARY).map((message) => ({
+        body: message.body,
+        senderType: message.senderType,
+        senderClerkUserId: message.senderClerkUserId,
+        currentClerkUserId,
+        label: getSpeakerLabel(message, currentClerkUserId, title),
+      })),
+    );
+
     console.log('Transcript sent to local Llama summary:\n', transcript);
   }
 
@@ -269,9 +326,15 @@ export async function summarizeRecentMessages(
 }
 
 export async function suggestRepliesForRecentMessages(
+  title: string,
   messages: Message[],
+  currentClerkUserId: string | null | undefined,
 ): Promise<ReplySuggestionResult> {
-  const transcript = createReplyTranscript(messages);
+  const transcript = createReplyTranscript(
+    title,
+    messages,
+    currentClerkUserId,
+  );
 
   if (!transcript) {
     return {
