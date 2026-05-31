@@ -33,10 +33,13 @@ type Props = {
 };
 
 export default function ChatListScreen({ onLogout }: Props) {
-  const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<AppStackParamList>>();
   const { userId, getToken } = useAuth();
 
-  const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const [conversations, setConversations] = useState<ConversationListItem[]>(
+    [],
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -179,18 +182,32 @@ export default function ChatListScreen({ onLogout }: Props) {
           <Text style={styles.title}>Chats</Text>
         </View>
 
-        <Pressable
-          onPress={onLogout}
-          style={({ pressed }) => [
-            styles.logoutButton,
-            pressed && styles.logoutButtonPressed,
-          ]}
-        >
-          <Text style={styles.logoutText}>Logout</Text>
-        </Pressable>
-      </View>
+        <View style={styles.headerActions}>
+          <Pressable
+            accessibilityLabel="Add contact"
+            accessibilityRole="button"
+            onPress={handleAddContact}
+            style={({ pressed }) => [
+              styles.addContactButton,
+              pressed && styles.addContactButtonPressed,
+            ]}
+          >
+            <Text style={styles.addContactIcon}>+</Text>
+          </Pressable>
 
-      <ProfileSummary />
+          <ProfileSummary />
+
+          <Pressable
+            onPress={onLogout}
+            style={({ pressed }) => [
+              styles.logoutButton,
+              pressed && styles.logoutButtonPressed,
+            ]}
+          >
+            <Text style={styles.logoutText}>Logout</Text>
+          </Pressable>
+        </View>
+      </View>
 
       <View style={styles.searchWrap}>
         <TextInput
@@ -201,19 +218,6 @@ export default function ChatListScreen({ onLogout }: Props) {
           style={styles.searchInput}
           value={searchQuery}
         />
-      </View>
-
-      <View style={styles.actionsWrap}>
-        <Pressable
-          onPress={handleAddContact}
-          style={({ pressed }) => [
-            styles.addContactButton,
-            pressed && styles.addContactButtonPressed,
-          ]}
-        >
-          <Text style={styles.addContactIcon}>+</Text>
-          <Text style={styles.addContactText}>Add Contact</Text>
-        </Pressable>
       </View>
 
       <FlatList
@@ -242,7 +246,7 @@ export default function ChatListScreen({ onLogout }: Props) {
                 <Text style={styles.emptyText}>
                   {normalizedSearchQuery
                     ? 'Try searching by contact name, email, or last message.'
-                    : 'Tap Add Contact to save an email and start a new chat.'}
+                    : 'Tap + to save an email and start a new chat.'}
                 </Text>
               </>
             )}
@@ -265,6 +269,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 10,
+    zIndex: 20,
   },
   kicker: {
     color: '#22C55E',
@@ -278,18 +283,24 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 4,
   },
+  headerActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
   logoutButton: {
-    borderColor: '#2E4B40',
+    backgroundColor: '#BBF7D0',
+    borderColor: '#86EFAC',
     borderRadius: 8,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
   logoutButtonPressed: {
     opacity: 0.68,
   },
   logoutText: {
-    color: '#D9FFF0',
+    color: '#064E3B',
     fontSize: 14,
     fontWeight: '800',
   },
@@ -307,20 +318,13 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: 14,
   },
-  actionsWrap: {
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    paddingBottom: 8,
-  },
   addContactButton: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
     backgroundColor: '#22C55E',
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
   },
   addContactButtonPressed: {
     backgroundColor: '#16A34A',
@@ -328,18 +332,13 @@ const styles = StyleSheet.create({
   },
   addContactIcon: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 26,
     fontWeight: '900',
-    lineHeight: 22,
-  },
-  addContactText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '900',
+    lineHeight: 28,
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 4,
     paddingBottom: 28,
   },
   emptyState: {
