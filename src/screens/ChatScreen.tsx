@@ -32,7 +32,7 @@ import {
 import {
   suggestRepliesForRecentMessages,
   summarizeRecentMessages,
-} from '../ai/mockAssistant';
+} from '../ai/localLlamaAssistant';
 import { getConversationById } from '../db/conversationRepository';
 import {
   addMessage,
@@ -218,9 +218,18 @@ export default function ChatScreen({ navigation, route }: Props) {
 
   async function handleRefresh() {
     setIsRefreshing(true);
-
+  
     try {
+      await loadThread();
       await syncCurrentChat({ showIndicator: false });
+    } catch (refreshError) {
+      console.warn('Chat refresh failed:', refreshError);
+  
+      try {
+        await loadThread();
+      } catch (localRefreshError) {
+        console.warn('Local refresh also failed:', localRefreshError);
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -247,65 +256,84 @@ export default function ChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     let cancelled = false;
     let channel: any = null;
-
+  
     async function setupThread() {
       setIsLoading(true);
-
+      setError('');
+  
+      let conversation: Awaited<ReturnType<typeof loadThread>> = null;
+  
+      /*
+       * Step 1: Load locally cached SQLite messages first.
+       * This must work even when the phone has no internet connection.
+       */
       try {
-        const conversation = await loadThread();
-
-        if (!conversation || !userId) {
-          return;
-        }
-
-        if (!conversation.remoteId) {
-          return;
-        }
-
-        await syncCurrentChat({ showIndicator: false });
-
-        if (cancelled) {
-          return;
-        }
-
-        const subscriptionKey = `${conversationId}:${conversation.remoteId}:${userId}`;
-
-        if (subscriptionKeyRef.current === subscriptionKey) {
-          return;
-        }
-
-        subscriptionKeyRef.current = subscriptionKey;
-
-        channel = subscribeToConversationMessages({
-          localConversationId: conversationId,
-          remoteConversationId: conversation.remoteId,
-          currentClerkUserId: userId,
-          getClerkToken,
-          onMessageSaved: async () => {
-            if (!cancelled) {
-              await loadThread();
-            }
-          },
-        });
-      } catch (setupError) {
-        console.warn('Remote message setup failed:', setupError);
-
+        conversation = await loadThread();
+      } catch (localLoadError) {
+        console.warn('Local chat load failed:', localLoadError);
+  
         if (!cancelled) {
-          setError('Could not load chat messages.');
+          setError('Could not load saved chat messages.');
         }
+  
+        return;
       } finally {
+        /*
+         * Stop blocking the UI as soon as the local database read completes.
+         * Remote sync must never prevent cached messages from being displayed.
+         */
         if (!cancelled) {
           setIsLoading(false);
         }
       }
+  
+      if (cancelled || !conversation || !userId || !conversation.remoteId) {
+        return;
+      }
+  
+      /*
+       * Step 2: Start realtime subscription independently of the initial
+       * remote pull. When offline, Supabase can reconnect later.
+       */
+      const subscriptionKey = `${conversationId}:${conversation.remoteId}:${userId}`;
+  
+      if (subscriptionKeyRef.current !== subscriptionKey) {
+        try {
+          subscriptionKeyRef.current = subscriptionKey;
+  
+          channel = subscribeToConversationMessages({
+            localConversationId: conversationId,
+            remoteConversationId: conversation.remoteId,
+            currentClerkUserId: userId,
+            getClerkToken,
+            onMessageSaved: async () => {
+              if (!cancelled) {
+                await loadThread();
+              }
+            },
+          });
+        } catch (subscriptionError) {
+          subscriptionKeyRef.current = null;
+          console.warn(
+            'Realtime subscription could not start. Will retry later:',
+            subscriptionError,
+          );
+        }
+      }
+  
+      /*
+       * Step 3: Sync in the background.
+       * Do not await this before showing locally saved messages.
+       */
+      void syncCurrentChat({ showIndicator: false });
     }
-
+  
     setupThread();
-
+  
     return () => {
       cancelled = true;
       subscriptionKeyRef.current = null;
-
+  
       if (channel) {
         channel.unsubscribe();
       }
@@ -371,31 +399,41 @@ export default function ChatScreen({ navigation, route }: Props) {
     setIsAiMenuVisible(false);
     setIsGeneratingAi(true);
     setSummaryText('');
-
+  
     try {
-      const result = await summarizeRecentMessages(title, messages);
+      const result = await summarizeRecentMessages(
+        title,
+        messages,
+        userId,
+      );
+  
       setSummaryText(result);
       setIsSummaryVisible(true);
     } catch (summaryError) {
-      console.warn('Mock summary failed:', summaryError);
+      console.warn('Local summary failed:', summaryError);
       setSummaryText('Could not generate a summary right now.');
       setIsSummaryVisible(true);
     } finally {
       setIsGeneratingAi(false);
     }
   }
-
+  
   async function handleSuggestReplies() {
     setIsAiMenuVisible(false);
     setIsGeneratingAi(true);
     setReplySuggestions([]);
-
+  
     try {
-      const result = await suggestRepliesForRecentMessages(messages);
+      const result = await suggestRepliesForRecentMessages(
+        title,
+        messages,
+        userId,
+      );
+  
       setReplySuggestions(result.suggestions);
       setIsReplyModalVisible(true);
     } catch (suggestionError) {
-      console.warn('Mock reply suggestion failed:', suggestionError);
+      console.warn('Local reply suggestion failed:', suggestionError);
       setReplySuggestions(['Could not generate suggestions right now.']);
       setIsReplyModalVisible(true);
     } finally {
@@ -459,11 +497,11 @@ export default function ChatScreen({ navigation, route }: Props) {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         style={styles.flex}
       >
-        {isLoading ? (
-          <View style={styles.centered}>
-            <ActivityIndicator color="#25D366" />
-          </View>
-        ) : error ? (
+      {isLoading && messages.length === 0 ? (
+        <View style={styles.centered}>
+          <ActivityIndicator color="#25D366" />
+        </View>
+            ) : error && messages.length === 0 ? (
           <View style={styles.centered}>
             <Text style={styles.errorText}>{error}</Text>
           </View>
@@ -571,7 +609,7 @@ export default function ChatScreen({ navigation, route }: Props) {
           ]}
         >
           <TextInput
-            editable={!isLoading && !Boolean(error)}
+            editable={!(isLoading && messages.length === 0) && !Boolean(error)}
             multiline
             onChangeText={setDraft}
             placeholder="Message"

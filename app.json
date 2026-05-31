@@ -31,7 +31,15 @@
     },
     "plugins": [
       "@clerk/expo",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "llama.rn",
+        {
+          "enableEntitlements": false,
+          "forceCxx20": true,
+          "enableOpenCLAndHexagon": false
+        }
+      ]
     ]
   }
 }
