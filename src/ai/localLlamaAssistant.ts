@@ -5,6 +5,10 @@ import type { Message } from '../types/message';
 
 type LocalLlamaContext = Awaited<ReturnType<typeof initLlama>>;
 
+export type ReplySuggestionResult = {
+  suggestions: string[];
+};
+
 const MODEL_FILE_NAME = 'Llama-3.2-1B-Instruct-Q4_K_M.gguf';
 
 const STOP_WORDS = [
@@ -19,10 +23,19 @@ const STOP_WORDS = [
   '<|endoftext|>',
 ];
 
-const MAX_MESSAGES_FOR_SUMMARY = 12;
-const MAX_MESSAGE_LENGTH = 220;
+const MODEL_CONTEXT_SIZE = 2048;
+
+const MAX_MESSAGES_FOR_SUMMARY = 24;
+const MAX_SUMMARY_MESSAGE_LENGTH = 420;
+const MAX_SUMMARY_TRANSCRIPT_CHARACTERS = 5200;
+
+const MAX_MESSAGES_FOR_REPLIES = 16;
+const MAX_REPLY_MESSAGE_LENGTH = 320;
+const MAX_REPLY_TRANSCRIPT_CHARACTERS = 3600;
+const MAX_SUGGESTION_LENGTH = 120;
 
 let contextPromise: Promise<LocalLlamaContext> | null = null;
+let generationQueue: Promise<unknown> = Promise.resolve();
 
 function getModelPath(): string {
   if (!FileSystem.documentDirectory) {
@@ -50,7 +63,7 @@ async function getLocalLlamaContext(): Promise<LocalLlamaContext> {
     return initLlama({
       model: modelPath,
       use_mlock: false,
-      n_ctx: 1024,
+      n_ctx: MODEL_CONTEXT_SIZE,
       n_batch: 128,
       n_threads: 4,
       n_gpu_layers: 0,
@@ -63,57 +76,188 @@ async function getLocalLlamaContext(): Promise<LocalLlamaContext> {
   return contextPromise;
 }
 
-function createRecentTranscript(title: string, messages: Message[]): string {
-  return messages
-    .slice(-MAX_MESSAGES_FOR_SUMMARY)
-    .filter((message) => message.body.trim().length > 0)
-    .map((message) => {
-      const speaker = message.senderType === 'user' ? 'Me' : title;
-      const body = message.body.trim().slice(0, MAX_MESSAGE_LENGTH);
+/**
+ * llama.rn should handle one generation request at a time on this shared
+ * context. This queue prevents Summary and Suggested Reply actions from
+ * executing concurrently.
+ */
+async function runGenerationTask<T>(task: () => Promise<T>): Promise<T> {
+  const nextTask = generationQueue.then(task, task);
 
-      return `${speaker}: ${body}`;
-    })
-    .join('\n');
+  generationQueue = nextTask.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return nextTask;
+}
+
+function normalizeBody(body: string, maxLength: number): string {
+  return body.trim().replace(/\s+/g, ' ').slice(0, maxLength);
+}
+
+function buildTranscript(
+  messages: Message[],
+  otherSpeakerName: string,
+  maxMessages: number,
+  maxMessageLength: number,
+  maxTranscriptCharacters: number,
+): string {
+  const recentMessages = messages
+    .slice(-maxMessages)
+    .filter((message) => message.body.trim().length > 0);
+
+  const selectedLines: string[] = [];
+  let characterCount = 0;
+
+  /*
+   * Walk backwards so that the newest messages are retained first if the
+   * context limit is reached, then unshift to preserve chronological order.
+   */
+  for (let index = recentMessages.length - 1; index >= 0; index -= 1) {
+    const message = recentMessages[index];
+    const speaker =
+      message.senderType === 'user' ? 'Me' : otherSpeakerName;
+    const body = normalizeBody(message.body, maxMessageLength);
+    const line = `${speaker}: ${body}`;
+
+    if (
+      characterCount + line.length > maxTranscriptCharacters &&
+      selectedLines.length > 0
+    ) {
+      break;
+    }
+
+    selectedLines.unshift(line);
+    characterCount += line.length;
+  }
+
+  return selectedLines.join('\n');
+}
+
+function createSummaryTranscript(title: string, messages: Message[]): string {
+  return buildTranscript(
+    messages,
+    title,
+    MAX_MESSAGES_FOR_SUMMARY,
+    MAX_SUMMARY_MESSAGE_LENGTH,
+    MAX_SUMMARY_TRANSCRIPT_CHARACTERS,
+  );
+}
+
+function createReplyTranscript(messages: Message[]): string {
+  return buildTranscript(
+    messages,
+    'Other person',
+    MAX_MESSAGES_FOR_REPLIES,
+    MAX_REPLY_MESSAGE_LENGTH,
+    MAX_REPLY_TRANSCRIPT_CHARACTERS,
+  );
+}
+
+function parseReplySuggestions(rawText: string): string[] {
+  const cleanedLines = rawText
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^\s*[-*•]\s*/, '')
+        .replace(/^\s*\d+[.)]\s*/, '')
+        .replace(/^["']|["']$/g, '')
+        .trim(),
+    )
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^suggested replies?:?$/i.test(line))
+    .filter((line) => !/^repl(y|ies):?$/i.test(line))
+    .map((line) => line.slice(0, MAX_SUGGESTION_LENGTH));
+
+  const uniqueLines = Array.from(new Set(cleanedLines));
+
+  if (uniqueLines.length >= 3) {
+    return uniqueLines.slice(0, 3);
+  }
+
+  /*
+   * Small models sometimes return numbered responses on a single line.
+   * Try an additional split before accepting fewer suggestions.
+   */
+  const inlineNumberedReplies = rawText
+    .split(/(?=\s*\d+[.)]\s+)/)
+    .map((line) =>
+      line
+        .replace(/^\s*\d+[.)]\s*/, '')
+        .replace(/^["']|["']$/g, '')
+        .trim(),
+    )
+    .filter((line) => line.length > 0)
+    .map((line) => line.slice(0, MAX_SUGGESTION_LENGTH));
+
+  return Array.from(new Set([...uniqueLines, ...inlineNumberedReplies])).slice(
+    0,
+    3,
+  );
 }
 
 export async function summarizeRecentMessages(
   title: string,
   messages: Message[],
 ): Promise<string> {
-  const transcript = createRecentTranscript(title, messages);
+  const transcript = createSummaryTranscript(title, messages);
 
   if (!transcript) {
     return `There are no messages in this chat with ${title} to summarize yet.`;
   }
 
+  if (__DEV__) {
+    console.log('Transcript sent to local Llama summary:\n', transcript);
+  }
+
   const context = await getLocalLlamaContext();
 
-  const result = await context.completion({
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You summarize private chat conversations. Use only the supplied conversation. Do not invent details. Keep the summary short and useful.',
-      },
-      {
-        role: 'user',
-        content: [
-          `Summarize this recent chat with ${title}.`,
-          '',
-          'Requirements:',
-          '- Write no more than 3 short bullet points.',
-          '- Mention the main topic.',
-          '- Mention a pending action only if one is clearly present.',
-          '',
-          'Conversation:',
-          transcript,
-        ].join('\n'),
-      },
-    ],
-    n_predict: 120,
-    temperature: 0.2,
-    stop: STOP_WORDS,
-  });
+  const result = await runGenerationTask(() =>
+    context.completion({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You summarize private chat conversations.',
+            'Use only facts explicitly written in the provided chat.',
+            'Never guess missing information.',
+            'Never add dates, plans, decisions, feelings, or actions unless directly stated.',
+            'If something is unclear, omit it.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Summarize the recent chat with ${title}.`,
+            '',
+            'Return exactly this format:',
+            'TOPIC: one short sentence',
+            'KEY FACTS:',
+            '- fact explicitly stated in the chat',
+            '- fact explicitly stated in the chat',
+            'NEXT ACTION: one explicitly stated pending action, or "None stated"',
+            '',
+            'Important rules:',
+            '- Do not invent facts.',
+            '- Do not interpret emotions or intentions.',
+            '- Do not mention information outside the chat.',
+            '- Use at most 3 key facts.',
+            '',
+            '<CHAT>',
+            transcript,
+            '</CHAT>',
+          ].join('\n'),
+        },
+      ],
+      n_predict: 160,
+      temperature: 0.1,
+      top_k: 20,
+      top_p: 0.9,
+      stop: STOP_WORDS,
+    }),
+  );
 
   const summary = result.text.trim();
 
@@ -122,4 +266,77 @@ export async function summarizeRecentMessages(
   }
 
   return summary;
+}
+
+export async function suggestRepliesForRecentMessages(
+  messages: Message[],
+): Promise<ReplySuggestionResult> {
+  const transcript = createReplyTranscript(messages);
+
+  if (!transcript) {
+    return {
+      suggestions: [
+        'Hey, how are you?',
+        'What are you up to today?',
+        'Can we talk for a minute?',
+      ],
+    };
+  }
+
+  if (__DEV__) {
+    console.log('Transcript sent to local Llama replies:\n', transcript);
+  }
+
+  const context = await getLocalLlamaContext();
+
+  const result = await runGenerationTask(() =>
+    context.completion({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You write short text-message replies for the user.',
+            'Use only the supplied chat context.',
+            'Write natural replies the user could send next.',
+            'Do not invent facts, promises, dates, names, or actions.',
+            'Do not explain your answer.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            'Generate exactly 3 possible replies that I can send next.',
+            '',
+            'Rules:',
+            '- Each reply must be one short sentence.',
+            '- Each reply must be under 16 words.',
+            '- Make the three options meaningfully different.',
+            '- Do not use numbering.',
+            '- Do not use bullet symbols.',
+            '- Put one reply on each line.',
+            '- Do not include quotation marks.',
+            '',
+            '<CHAT>',
+            transcript,
+            '</CHAT>',
+          ].join('\n'),
+        },
+      ],
+      n_predict: 100,
+      temperature: 0.3,
+      top_k: 30,
+      top_p: 0.9,
+      stop: STOP_WORDS,
+    }),
+  );
+
+  const suggestions = parseReplySuggestions(result.text);
+
+  if (suggestions.length === 0) {
+    throw new Error('The local model did not return usable reply suggestions.');
+  }
+
+  return {
+    suggestions,
+  };
 }

@@ -29,8 +29,10 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
-import { suggestRepliesForRecentMessages } from '../ai/mockAssistant';
-import { summarizeRecentMessages } from '../ai/localLlamaAssistant';
+import {
+  suggestRepliesForRecentMessages,
+  summarizeRecentMessages,
+} from '../ai/localLlamaAssistant';
 import { getConversationById } from '../db/conversationRepository';
 import {
   addMessage,
@@ -375,7 +377,7 @@ export default function ChatScreen({ navigation, route }: Props) {
       setSummaryText(result);
       setIsSummaryVisible(true);
     } catch (summaryError) {
-      console.warn('Mock summary failed:', summaryError);
+      console.warn('Local summary failed:', summaryError);
       setSummaryText('Could not generate a summary right now.');
       setIsSummaryVisible(true);
     } finally {
@@ -393,7 +395,7 @@ export default function ChatScreen({ navigation, route }: Props) {
       setReplySuggestions(result.suggestions);
       setIsReplyModalVisible(true);
     } catch (suggestionError) {
-      console.warn('Mock reply suggestion failed:', suggestionError);
+      console.warn('Local reply suggestion failed:', suggestionError);
       setReplySuggestions(['Could not generate suggestions right now.']);
       setIsReplyModalVisible(true);
     } finally {
