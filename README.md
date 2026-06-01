@@ -1,104 +1,162 @@
-# 🚀 AIRagMessenger
+# AIRagMessenger
 
 [![Expo](https://img.shields.io/badge/Expo-54.0-blue?logo=expo&logoColor=white)](https://expo.dev/)
 [![React Native](https://img.shields.io/badge/React_Native-0.81-61DAFB?logo=react&logoColor=white)](https://reactnative.dev/)
 [![Supabase](https://img.shields.io/badge/Supabase-2.0-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
 [![Clerk](https://img.shields.io/badge/Clerk-Auth-6C47FF?logo=clerk&logoColor=white)](https://clerk.com/)
-[![Ollama](https://img.shields.io/badge/Ollama-AI-orange?logo=ollama&logoColor=white)](https://ollama.com/)
+[![llama.rn](https://img.shields.io/badge/llama.rn-Local_AI-orange)](https://github.com/mybigday/llama.rn)
 
-**AIRagMessenger** is a modern, offline-first mobile chat application powered by AI. It combines the speed of local SQLite storage with the reliability of Supabase cloud synchronization, featuring intelligent summaries and reply suggestions powered by local LLMs.
+AIRagMessenger is an offline-first mobile chat app with private local AI features. It stores messages locally in SQLite, syncs conversations through Supabase, authenticates users with Clerk, and can answer grounded questions about a chat by retrieving relevant messages and generating the answer on-device with Llama.
 
----
+## Key Features
 
-## ✨ Key Features
+- **Offline-first messaging:** Messages are written to local SQLite immediately, then synced in the background.
+- **Cloud sync and realtime delivery:** Supabase stores synced conversations and messages, with realtime subscriptions for incoming chat updates.
+- **Clerk authentication:** Clerk handles sign-in, sign-up, secure token caching, and Supabase JWT integration.
+- **Local AI model management:** The Local AI settings screen downloads, deletes, and tests the on-device `Llama-3.2-1B-Instruct-Q4_K_M.gguf` model.
+- **AI chat tools:** Generate summaries, reply suggestions, and grounded answers from inside a conversation.
+- **RAG message search:** Supabase full-text search retrieves relevant synced messages, then the local Llama model answers using only those sources.
+- **Mobile-native build:** The app uses native modules such as `expo-sqlite`, `expo-secure-store`, and `llama.rn`, so it should be run as a dev build or native Android/iOS app.
 
-- **📱 Offline-First:** Send messages instantly without waiting for the network. SQLite acts as your primary source of truth.
-- **🔄 Smart Sync:** Background synchronization with Supabase ensures your chats are backed up and available across devices.
-- **🤖 AI-Powered:** Get conversation summaries and smart reply suggestions using local LLMs (Ollama + Llama 3.2).
-- **🔒 Secure Auth:** Seamless authentication powered by Clerk Expo.
-- **⚡ Real-time:** Instant message delivery using Supabase Realtime subscriptions.
-- **🎨 Modern UI:** Beautiful, responsive design built with NativeWind (Tailwind CSS).
+## Architecture
 
----
+The app follows an offline-first flow:
 
-## 🏗️ Architecture
+1. The React Native UI reads and writes chat data through local SQLite repositories.
+2. Background sync pushes pending local messages and pulls remote changes from Supabase.
+3. Supabase Realtime notifies active chats about newly inserted messages.
+4. Clerk issues the `supabase` JWT used by the mobile app for authenticated Supabase access.
+5. For "Ask about this chat", Supabase searches synced message text and the local Llama model generates a grounded answer with source messages.
 
-The app follows a robust offline-first architecture:
+See [docs/architecture.md](docs/architecture.md) for more detail.
 
-1.  **UI** reads/writes to **SQLite** (Zero latency).
-2.  **Sync Bootstrapper** runs background tasks to push/pull data.
-3.  **Supabase** handles remote persistence and RLS security.
-4.  **Ollama** provides local AI inference for privacy and speed.
+## Quick Start
 
-> [!TIP]
-> Check out the [Architecture Documentation](docs/architecture.md) for a deep dive into the system design.
+### Prerequisites
 
----
+- Node.js 18 or newer
+- npm
+- Android Studio / Android SDK for native Android builds, or Xcode for iOS builds
+- A Clerk application
+- A Supabase project
+- Optional: Ollama, only if you want to run the separate backend service
 
-## 🚀 Quick Start
+### Install
 
-### 1. Prerequisites
-- [Ollama](https://ollama.com/) installed and running (`ollama pull llama3.2`)
-- [Expo Go](https://expo.dev/go) app on your mobile device.
-
-### 2. Installation
 ```bash
-# Clone the repository
 git clone https://github.com/Abhinov007/AI-Rag-Messenger.git
-
-# Install mobile dependencies
+cd AI-Rag-Messenger
 npm install
-
-# Install backend dependencies
-cd backend && npm install
 ```
 
-### 3. Environment Setup
-Copy `.env.example` to `.env` in both the root and `backend` folders and fill in your keys.
+The optional backend has its own dependencies:
 
-### 4. Running the Project
 ```bash
-# Start the AI Backend
-cd backend && npm run dev
-
-# Start the Expo Mobile App (in a new terminal)
-npm start
+cd backend
+npm install
 ```
 
----
+### Environment
 
-## 📚 Documentation
+Copy the root example file and fill in your Clerk and Supabase values:
 
-Detailed guides for various aspects of the project:
+```bash
+cp .env.example .env
+```
 
-- 🛠️ **[Setup Guide](docs/setup.md)** - Detailed instructions for Clerk, Supabase, and AI.
-- 🏗️ **[Architecture](docs/architecture.md)** - How the offline-first sync model works.
-- 🗄️ **[Database Schema](docs/database.md)** - SQLite and Supabase table structures.
-- 🔌 **[API Reference](docs/api.md)** - Documentation for the AI backend endpoints.
+Required mobile variables:
 
----
+```env
+EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
 
-## 🛠️ Tech Stack
+If you run the optional backend, also copy `backend/.env.example` to `backend/.env`.
 
-- **Frontend:** Expo, React Native, TypeScript, React Navigation.
-- **State Management:** Zustand.
-- **Styling:** NativeWind (Tailwind CSS).
-- **Database:** Expo SQLite (Local), Supabase (Remote).
-- **Auth:** Clerk Expo.
-- **AI Backend:** Node.js (Express), Ollama, Llama 3.2.
+### Supabase Setup
 
----
+1. Run `supabase.messages.sql` in the Supabase SQL editor to create the base chat schema and RLS policies.
+2. Run `supabase/migrations/20260601_add_rag_message_search.sql` to add the message search vector, indexes, and `search_conversation_messages` RPC used by chat RAG.
+3. In Clerk, create a JWT template named exactly `supabase` using Clerk's Supabase template.
 
-## 🤝 Contributing
+### Run The App
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Because the project uses `llama.rn`, use a native/dev-client build instead of Expo Go:
 
----
+```bash
+npm run android
+```
 
-## 📄 License
+or:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```bash
+npm run ios
+```
 
----
+For an EAS preview Android APK:
 
-<p align="center">Made with ❤️ for the AI/Mobile Community</p>
+```bash
+eas build --profile preview --platform android
+```
+
+## Local AI
+
+Open **Settings -> Local AI** in the app to download the local model. The app stores `Llama-3.2-1B-Instruct-Q4_K_M.gguf` in app document storage and shows download progress.
+
+Once installed, the chat AI menu can:
+
+- summarize recent messages
+- suggest editable replies
+- ask grounded questions about synced messages in the current chat
+
+The RAG answer flow searches Supabase for relevant messages, but generation happens locally on the phone. Unsynced local-only messages are not available to the remote search RPC yet.
+
+## Optional Backend
+
+The `backend/` service still provides Ollama-backed endpoints:
+
+- `GET /health`
+- `GET /health/ollama`
+- `POST /ai/summarize`
+- `POST /ai/suggest-reply`
+
+Start it with:
+
+```bash
+cd backend
+npm run dev
+```
+
+See [backend/README.md](backend/README.md) for backend setup details.
+
+## Documentation
+
+- [Setup Guide](docs/setup.md)
+- [Architecture](docs/architecture.md)
+- [Database Schema](docs/database.md)
+- [API Reference](docs/api.md)
+
+## Tech Stack
+
+- **Mobile:** Expo, React Native, TypeScript, React Navigation
+- **Styling:** NativeWind / Tailwind CSS
+- **Local storage:** Expo SQLite
+- **Remote storage:** Supabase PostgreSQL, RLS, Realtime, RPC
+- **Auth:** Clerk Expo
+- **On-device AI:** `llama.rn`, Llama 3.2 1B GGUF
+- **Optional AI backend:** Node.js, Express, Ollama
+
+## Useful Commands
+
+```bash
+npm start
+npm run android
+npm run ios
+npm run web
+```
+
+```bash
+cd backend
+npm run dev
+```
