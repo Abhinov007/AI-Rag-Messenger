@@ -18,6 +18,13 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Android local/generated files
+android/local.properties
+android/.gradle/
+android/app/.cxx/
+android/app/build/
+android/build/
+android/app/main/assets/
 # Metro
 .metro-health-check*
 
@@ -25,6 +32,10 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+android-build-log.txt
+rn-native-config.json
+community-native-config.json
+llama-native-config.json
 
 # macOS
 .DS_Store
@@ -36,9 +47,8 @@ yarn-error.*
 !.env.example
 .env*.local
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 
-
-
-
+# Local LLM model files
+*.gguf

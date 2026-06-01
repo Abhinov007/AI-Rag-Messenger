@@ -49,6 +49,7 @@ import { subscribeToConversationMessages } from '../services/messageRealtime';
 import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
+import { searchConversationMessages } from '../services/ragSearch';
 
 type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
 type ChatRoute = RouteProp<AppStackParamList, 'Chat'>;
@@ -89,6 +90,8 @@ export default function ChatScreen({ navigation, route }: Props) {
   const subscriptionKeyRef = useRef<string | null>(null);
   const activeSyncRef = useRef(false);
   const getTokenRef = useRef(getToken);
+
+  const [isTestingRag, setIsTestingRag] = useState(false);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -466,6 +469,36 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  async function handleTestRagSearch() {
+    setIsAiMenuVisible(false);
+    setIsTestingRag(true);
+  
+    try {
+      const conversation = await getConversationById(
+        conversationId,
+        userId ?? undefined,
+      );
+  
+      if (!conversation?.remoteId) {
+        throw new Error('Conversation has not been synced to Supabase yet.');
+      }
+  
+      const results = await searchConversationMessages({
+        remoteConversationId: conversation.remoteId,
+        question: 'What did Maa say about Arsenal?',
+        participantName: title,
+        getClerkToken,
+        matchCount: 8,
+      });
+  
+      console.log('RAG retrieved messages:', results);
+    } catch (ragError) {
+      console.warn('RAG search test failed:', ragError);
+    } finally {
+      setIsTestingRag(false);
+    }
+  }
+
   function handlePickSuggestion(suggestion: string) {
     setDraft(suggestion);
     setIsReplyModalVisible(false);
@@ -667,53 +700,71 @@ export default function ChatScreen({ navigation, route }: Props) {
       </KeyboardAvoidingView>
 
       <Modal
-        animationType="fade"
-        onRequestClose={() => setIsAiMenuVisible(false)}
-        transparent
-        visible={isAiMenuVisible}
+  animationType="fade"
+  onRequestClose={() => setIsAiMenuVisible(false)}
+  transparent
+  visible={isAiMenuVisible}
+>
+  <Pressable
+    onPress={() => setIsAiMenuVisible(false)}
+    style={styles.modalBackdrop}
+  >
+    <Pressable style={styles.actionSheet}>
+      <Text style={styles.modalTitle}>AI tools</Text>
+      <Text style={styles.modalSubtitle}>
+        Use chat context to summarize, draft a reply, or test message
+        retrieval.
+      </Text>
+
+      <TouchableOpacity
+        activeOpacity={0.85}
+        disabled={isGeneratingAi || isTestingRag}
+        onPress={handleSummarizeChat}
+        style={styles.actionButton}
       >
-        <Pressable
-          onPress={() => setIsAiMenuVisible(false)}
-          style={styles.modalBackdrop}
-        >
-          <Pressable style={styles.actionSheet}>
-            <Text style={styles.modalTitle}>AI tools</Text>
-            <Text style={styles.modalSubtitle}>
-              Use recent chat context to summarize or draft a reply.
-            </Text>
+        <Text style={styles.actionTitle}>Summarize this chat</Text>
+        <Text style={styles.actionDescription}>
+          Generate a short summary using the local model.
+        </Text>
+      </TouchableOpacity>
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={handleSummarizeChat}
-              style={styles.actionButton}
-            >
-              <Text style={styles.actionTitle}>Summarize this chat</Text>
-              <Text style={styles.actionDescription}>
-                Show a short AI summary in a separate card.
-              </Text>
-            </TouchableOpacity>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        disabled={isGeneratingAi || isTestingRag}
+        onPress={handleSuggestReplies}
+        style={styles.actionButton}
+      >
+        <Text style={styles.actionTitle}>Suggest a reply</Text>
+        <Text style={styles.actionDescription}>
+          Generate editable reply suggestions locally.
+        </Text>
+      </TouchableOpacity>
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={handleSuggestReplies}
-              style={styles.actionButton}
-            >
-              <Text style={styles.actionTitle}>Suggest a reply</Text>
-              <Text style={styles.actionDescription}>
-                Generate 2-3 editable reply suggestions.
-              </Text>
-            </TouchableOpacity>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        disabled={isGeneratingAi || isTestingRag}
+        onPress={handleTestRagSearch}
+        style={styles.actionButton}
+      >
+        <Text style={styles.actionTitle}>
+          {isTestingRag ? 'Searching messages...' : 'Test RAG Search'}
+        </Text>
+        <Text style={styles.actionDescription}>
+          Search Supabase for relevant messages in this chat.
+        </Text>
+      </TouchableOpacity>
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setIsAiMenuVisible(false)}
-              style={styles.secondaryButton}
-            >
-              <Text style={styles.secondaryButtonLabel}>Close</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        disabled={isTestingRag}
+        onPress={() => setIsAiMenuVisible(false)}
+        style={styles.secondaryButton}
+      >
+        <Text style={styles.secondaryButtonLabel}>Close</Text>
+      </TouchableOpacity>
+    </Pressable>
+  </Pressable>
+</Modal>
 
       <Modal
         animationType="slide"

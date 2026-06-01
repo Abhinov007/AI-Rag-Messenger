@@ -1,8 +1,19 @@
 import type { Message } from '../types/message';
 import { getLocalLlamaContext } from './localAiModel';
+import type { RetrievedChatMessage } from '../services/ragSearch';
 
 export type ReplySuggestionResult = {
   suggestions: string[];
+};
+
+export type RagAnswerResult = {
+  answer: string;
+  sources: Array<{
+    id: string;
+    speaker: string;
+    body: string;
+    createdAt: string;
+  }>;
 };
 
 const STOP_WORDS = [
@@ -349,5 +360,101 @@ export async function suggestRepliesForRecentMessages(
 
   return {
     suggestions,
+  };
+}
+
+export async function answerQuestionFromRetrievedMessages(
+  question: string,
+  retrievedMessages: RetrievedChatMessage[],
+  currentClerkUserId: string | null | undefined,
+  otherSpeakerName: string,
+): Promise<RagAnswerResult> {
+  const trimmedQuestion = question.trim();
+
+  if (!trimmedQuestion) {
+    throw new Error('Enter a question before asking about this chat.');
+  }
+
+  if (retrievedMessages.length === 0) {
+    return {
+      answer: 'I could not find relevant messages in this chat.',
+      sources: [],
+    };
+  }
+
+  const sources = retrievedMessages.map((message) => {
+    const speaker =
+      message.senderClerkUserId === currentClerkUserId
+        ? 'Me'
+        : otherSpeakerName;
+
+    return {
+      id: message.id,
+      speaker,
+      body: message.body.trim(),
+      createdAt: message.createdAt,
+    };
+  });
+
+  const retrievedContext = sources
+    .map(
+      (source, index) =>
+        `[Source ${index + 1}] ${source.speaker}: ${source.body}`,
+    )
+    .join('\n');
+
+  if (__DEV__) {
+    console.log('RAG question sent to local Llama:', trimmedQuestion);
+    console.log('RAG context sent to local Llama:\n', retrievedContext);
+  }
+
+  const context = await getLocalLlamaContext();
+
+  const result = await runGenerationTask(() =>
+    context.completion({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You answer questions about a private chat conversation.',
+            'Use only the supplied source messages.',
+            'Respect the speaker labels exactly.',
+            'If the user asks what the other person said, do not treat messages labelled "Me" as statements from the other person.',
+            'If the answer is not clearly stated in the sources, say that it was not found.',
+            'Do not invent facts or add assumptions.',
+            'Answer briefly and clearly.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Question: ${trimmedQuestion}`,
+            '',
+            'Retrieved source messages:',
+            '<SOURCES>',
+            retrievedContext,
+            '</SOURCES>',
+            '',
+            'Answer the question using only the source messages.',
+          ].join('\n'),
+        },
+      ],
+      n_predict: 160,
+      temperature: 0.1,
+      top_k: 20,
+      top_p: 0.9,
+      stop: STOP_WORDS,
+    }),
+  );
+
+  const answer = result.text.trim();
+
+  if (!answer) {
+    throw new Error('The local model returned an empty RAG answer.');
+  }
+
+  return {
+    answer,
+    sources,
   };
 }
