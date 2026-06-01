@@ -24,6 +24,8 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  ScrollView,
+  Keyboard,
 } from 'react-native';
 import {
   SafeAreaView,
@@ -50,6 +52,12 @@ import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 import { searchConversationMessages } from '../services/ragSearch';
+import {
+  answerQuestionFromRetrievedMessages,
+  type RagAnswerResult,
+} from '../ai/localLlamaAssistant';
+
+
 
 type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
 type ChatRoute = RouteProp<AppStackParamList, 'Chat'>;
@@ -91,7 +99,12 @@ export default function ChatScreen({ navigation, route }: Props) {
   const activeSyncRef = useRef(false);
   const getTokenRef = useRef(getToken);
 
-  const [isTestingRag, setIsTestingRag] = useState(false);
+  const [isAskChatVisible, setIsAskChatVisible] = useState(false);
+  const [ragQuestion, setRagQuestion] = useState('');
+  const [ragResult, setRagResult] = useState<RagAnswerResult | null>(null);
+  const [ragError, setRagError] = useState('');
+  const [isGeneratingRagAnswer, setIsGeneratingRagAnswer] = useState(false);
+  const [pendingAskChatOpen, setPendingAskChatOpen] = useState(false);
 
   useEffect(() => {
     getTokenRef.current = getToken;
@@ -102,6 +115,24 @@ export default function ChatScreen({ navigation, route }: Props) {
       scrollToBottom(true);
     }
   }, [messages.length]);
+
+  useEffect(() => {
+    if (!pendingAskChatOpen || isAiMenuVisible) {
+      return;
+    }
+  
+    const timer = setTimeout(() => {
+      console.log('Ask About Chat modal now visible');
+  
+      setRagQuestion('');
+      setRagResult(null);
+      setRagError('');
+      setIsAskChatVisible(true);
+      setPendingAskChatOpen(false);
+    }, 250);
+  
+    return () => clearTimeout(timer);
+  }, [isAiMenuVisible, pendingAskChatOpen]);
 
   function scrollToBottom(animated = true) {
     requestAnimationFrame(() => {
@@ -469,9 +500,28 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
-  async function handleTestRagSearch() {
+  function handleOpenAskChat() {
+    if (pendingAskChatOpen || isAskChatVisible) {
+      return;
+    }
+  
+    console.log('Ask About Chat requested');
+  
+    setPendingAskChatOpen(true);
     setIsAiMenuVisible(false);
-    setIsTestingRag(true);
+  }
+  
+  async function handleAskAboutChat() {
+    const question = ragQuestion.trim();
+  
+    if (!question) {
+      setRagError('Enter a question about this chat.');
+      return;
+    }
+    
+    setRagError('');
+    setRagResult(null);
+    setIsGeneratingRagAnswer(true);
   
     try {
       const conversation = await getConversationById(
@@ -479,24 +529,48 @@ export default function ChatScreen({ navigation, route }: Props) {
         userId ?? undefined,
       );
   
-      if (!conversation?.remoteId) {
-        throw new Error('Conversation has not been synced to Supabase yet.');
+      if (!conversation) {
+        throw new Error('Conversation not found locally.');
       }
   
-      const results = await searchConversationMessages({
+      if (!conversation.remoteId) {
+        throw new Error(
+          'This conversation has not been synchronized yet. Online RAG currently searches synced messages only.',
+        );
+      }
+  
+      const retrievedMessages = await searchConversationMessages({
         remoteConversationId: conversation.remoteId,
-        question: 'What did Maa say about Arsenal?',
+        question,
         participantName: title,
         getClerkToken,
         matchCount: 8,
       });
   
-      console.log('RAG retrieved messages:', results);
-    } catch (ragError) {
-      console.warn('RAG search test failed:', ragError);
+      if (__DEV__) {
+        console.log('RAG retrieved messages:', retrievedMessages);
+      }
+  
+      const answer = await answerQuestionFromRetrievedMessages(
+        question,
+        retrievedMessages,
+        userId,
+        title,
+      );
+  
+      setRagResult(answer);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Could not answer this question right now.';
+  
+      console.warn('Ask about chat failed:', error);
+      setRagError(message);
     } finally {
-      setIsTestingRag(false);
+      setIsGeneratingRagAnswer(false);
     }
+    console.log('Ask About Chat submitted:', question);
   }
 
   function handlePickSuggestion(suggestion: string) {
@@ -712,13 +786,16 @@ export default function ChatScreen({ navigation, route }: Props) {
     <Pressable style={styles.actionSheet}>
       <Text style={styles.modalTitle}>AI tools</Text>
       <Text style={styles.modalSubtitle}>
-        Use chat context to summarize, draft a reply, or test message
-        retrieval.
+        Generate local AI responses or ask grounded questions about this chat.
       </Text>
 
       <TouchableOpacity
         activeOpacity={0.85}
-        disabled={isGeneratingAi || isTestingRag}
+        disabled={
+          isGeneratingAi ||
+          isGeneratingRagAnswer ||
+          pendingAskChatOpen
+        }
         onPress={handleSummarizeChat}
         style={styles.actionButton}
       >
@@ -730,7 +807,11 @@ export default function ChatScreen({ navigation, route }: Props) {
 
       <TouchableOpacity
         activeOpacity={0.85}
-        disabled={isGeneratingAi || isTestingRag}
+        disabled={
+          isGeneratingAi ||
+          isGeneratingRagAnswer ||
+          pendingAskChatOpen
+        }
         onPress={handleSuggestReplies}
         style={styles.actionButton}
       >
@@ -741,22 +822,30 @@ export default function ChatScreen({ navigation, route }: Props) {
       </TouchableOpacity>
 
       <TouchableOpacity
-        activeOpacity={0.85}
-        disabled={isGeneratingAi || isTestingRag}
-        onPress={handleTestRagSearch}
-        style={styles.actionButton}
-      >
-        <Text style={styles.actionTitle}>
-          {isTestingRag ? 'Searching messages...' : 'Test RAG Search'}
-        </Text>
-        <Text style={styles.actionDescription}>
-          Search Supabase for relevant messages in this chat.
-        </Text>
-      </TouchableOpacity>
+  activeOpacity={0.85}
+  disabled={
+    isGeneratingAi ||
+    isGeneratingRagAnswer ||
+    pendingAskChatOpen
+  }
+  onPress={handleOpenAskChat}
+  style={styles.actionButton}
+>
+  <Text style={styles.actionTitle}>
+    {pendingAskChatOpen ? 'Opening...' : 'Ask about this chat'}
+  </Text>
+  <Text style={styles.actionDescription}>
+    Search relevant messages and generate a grounded local answer.
+  </Text>
+</TouchableOpacity>
 
       <TouchableOpacity
         activeOpacity={0.85}
-        disabled={isTestingRag}
+        disabled={
+          isGeneratingAi ||
+          isGeneratingRagAnswer ||
+          pendingAskChatOpen
+        }
         onPress={() => setIsAiMenuVisible(false)}
         style={styles.secondaryButton}
       >
@@ -766,6 +855,126 @@ export default function ChatScreen({ navigation, route }: Props) {
   </Pressable>
 </Modal>
 
+<Modal
+  animationType="slide"
+  onRequestClose={() => setIsAskChatVisible(false)}
+  transparent
+  visible={isAskChatVisible}
+>
+  <KeyboardAvoidingView
+    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    keyboardVerticalOffset={0}
+    style={styles.ragKeyboardAvoiding}
+  >
+    <Pressable
+      onPress={Keyboard.dismiss}
+      style={styles.ragBackdrop}
+    >
+      <Pressable
+        onPress={(event) => event.stopPropagation()}
+        style={styles.ragModal}
+      >
+        <Text style={styles.modalTitle}>Ask about this chat</Text>
+
+        <Text style={styles.modalSubtitle}>
+          Relevant synced messages are retrieved from Supabase. Your answer is
+          generated locally on this phone.
+        </Text>
+
+        <TextInput
+          editable={!isGeneratingRagAnswer}
+          multiline
+          onChangeText={(text) => {
+            setRagQuestion(text);
+            setRagError('');
+          }}
+          placeholder={`What did ${title} say about Arsenal?`}
+          placeholderTextColor="#8b949e"
+          returnKeyType="done"
+          style={styles.ragQuestionInput}
+          textAlignVertical="top"
+          value={ragQuestion}
+        />
+
+        {ragError.length > 0 && (
+          <Text style={styles.ragErrorText}>{ragError}</Text>
+        )}
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          disabled={isGeneratingRagAnswer || ragQuestion.trim().length === 0}
+          onPress={() => {
+            Keyboard.dismiss();
+            handleAskAboutChat();
+          }}
+          style={[
+            styles.actionButton,
+            (isGeneratingRagAnswer || ragQuestion.trim().length === 0) &&
+              styles.ragDisabledButton,
+          ]}
+        >
+          <Text style={styles.actionTitle}>
+            {isGeneratingRagAnswer ? 'Answering...' : 'Ask locally'}
+          </Text>
+
+          <Text style={styles.actionDescription}>
+            Search this conversation and answer using local Llama.
+          </Text>
+        </TouchableOpacity>
+
+        {isGeneratingRagAnswer && (
+          <View style={styles.ragLoadingContainer}>
+            <ActivityIndicator color="#25D366" size="large" />
+            <Text style={styles.ragLoadingText}>
+              Retrieving messages and generating an answer...
+            </Text>
+          </View>
+        )}
+
+        {ragResult && (
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={styles.ragResultScroll}
+          >
+            <Text style={styles.ragSectionLabel}>Answer</Text>
+            <Text style={styles.ragAnswer}>{ragResult.answer}</Text>
+
+            <Text style={styles.ragSectionLabel}>Sources</Text>
+
+            {ragResult.sources.length === 0 ? (
+              <Text style={styles.ragNoSources}>
+                No relevant message sources were found.
+              </Text>
+            ) : (
+              ragResult.sources.map((source) => (
+                <View key={source.id} style={styles.ragSourceCard}>
+                  <Text style={styles.ragSourceSpeaker}>{source.speaker}</Text>
+                  <Text style={styles.ragSourceBody}>{source.body}</Text>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        )}
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          disabled={isGeneratingRagAnswer}
+          onPress={() => {
+            Keyboard.dismiss();
+            setIsAskChatVisible(false);
+          }}
+          style={[
+            styles.secondaryButton,
+            isGeneratingRagAnswer && styles.ragDisabledButton,
+          ]}
+        >
+          <Text style={styles.secondaryButtonLabel}>Close</Text>
+        </TouchableOpacity>
+      </Pressable>
+    </Pressable>
+  </KeyboardAvoidingView>
+</Modal>
       <Modal
         animationType="slide"
         onRequestClose={() => setIsSummaryVisible(false)}
@@ -1169,5 +1378,112 @@ const styles = StyleSheet.create({
     color: '#E8F5EF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  ragModal: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    bottom: 0,
+    left: 0,
+    maxHeight: '88%',
+    padding: 20,
+    position: 'absolute',
+    right: 0,
+  },
+
+  ragQuestionInput: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#e5e7eb',
+    borderRadius: 14,
+    borderWidth: 1,
+    color: '#111827',
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 14,
+    minHeight: 84,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    textAlignVertical: 'top',
+  },
+
+  ragErrorText: {
+    color: '#dc2626',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+
+  ragDisabledButton: {
+    opacity: 0.5,
+  },
+
+  ragLoadingContainer: {
+    alignItems: 'center',
+    marginVertical: 18,
+  },
+
+  ragLoadingText: {
+    color: '#6b7280',
+    fontSize: 13,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+
+  ragResultScroll: {
+    marginBottom: 12,
+    marginTop: 8,
+    maxHeight: 330,
+  },
+
+  ragSectionLabel: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    marginTop: 12,
+    textTransform: 'uppercase',
+  },
+
+  ragAnswer: {
+    color: '#111827',
+    fontSize: 15,
+    lineHeight: 23,
+  },
+
+  ragNoSources: {
+    color: '#6b7280',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+
+  ragSourceCard: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+
+  ragSourceSpeaker: {
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+
+  ragSourceBody: {
+    color: '#374151',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  ragKeyboardAvoiding: {
+    flex: 1,
+  },
+  
+  ragBackdrop: {
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    flex: 1,
+    justifyContent: 'flex-end',
   },
 });
