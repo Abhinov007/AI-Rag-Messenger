@@ -117,34 +117,43 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [condensedResult, setCondensedResult] =
     useState<CondensedOutgoingMessageResult | null>(null);
   const [editableCondensedText, setEditableCondensedText] = useState('');
-  const [isCondenseOfferDismissed, setIsCondenseOfferDismissed] =
-    useState(false);
-  const [hasAppliedCondensedDraft, setHasAppliedCondensedDraft] =
-    useState(false);
-
+  
+  /*
+   * Track the actual draft text that was dismissed or accepted.
+   * This prevents the feature from remaining hidden after the user edits
+   * the message into a new long draft.
+   */
+  const [dismissedCondenseDraft, setDismissedCondenseDraft] = useState('');
+  const [appliedCondensedDraft, setAppliedCondensedDraft] = useState('');
+  
   const trimmedDraft = draft.trim();
-
+  
+  const isLongDraft =
+    trimmedDraft.length >= MIN_CHARACTERS_FOR_CONDENSE;
+  
   const shouldOfferCondense =
-    trimmedDraft.length >= MIN_CHARACTERS_FOR_CONDENSE &&
-    !isCondenseOfferDismissed &&
-    !hasAppliedCondensedDraft &&
+    isLongDraft &&
+    trimmedDraft !== dismissedCondenseDraft &&
+    trimmedDraft !== appliedCondensedDraft &&
     !isCondensingMessage &&
     !isCondensePreviewVisible;
-
+  
   const editedCondensedCharacterCount = editableCondensedText.trim().length;
-
+  
   const editedReductionPercent = condensedResult
     ? calculateDraftReductionPercent(
         condensedResult.originalCharacterCount,
         editedCondensedCharacterCount,
       )
     : 0;
-
+  
   const canUseCondensedDraft =
     Boolean(condensedResult) &&
     editedCondensedCharacterCount > 0 &&
     editedCondensedCharacterCount <
       (condensedResult?.originalCharacterCount ?? 0);
+
+
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
@@ -454,89 +463,89 @@ export default function ChatScreen({ navigation, route }: Props) {
     setCondenseError('');
     setCondensedResult(null);
     setEditableCondensedText('');
-    setIsCondenseOfferDismissed(false);
-    setHasAppliedCondensedDraft(false);
+    setDismissedCondenseDraft('');
+    setAppliedCondensedDraft('');
   }
-
+  
   function handleDraftChange(text: string) {
     setDraft(text);
     setCondenseError('');
-
+  
     if (text.trim().length === 0) {
       resetCondenseComposerState();
-      return;
-    }
-
-    /*
-     * Once the user changes an already accepted condensed draft substantially,
-     * allow the feature to be offered again if it becomes long.
-     */
-    if (hasAppliedCondensedDraft && text.trim().length >= MIN_CHARACTERS_FOR_CONDENSE) {
-      setHasAppliedCondensedDraft(false);
-      setIsCondenseOfferDismissed(false);
     }
   }
-
+  
   async function handleCondenseOutgoingDraft() {
     const originalDraft = draft.trim();
-
+  
+    console.log('Condense requested:', {
+      draftLength: originalDraft.length,
+      threshold: MIN_CHARACTERS_FOR_CONDENSE,
+    });
+  
     if (originalDraft.length < MIN_CHARACTERS_FOR_CONDENSE) {
       setCondenseError(
         `Type at least ${MIN_CHARACTERS_FOR_CONDENSE} characters before condensing.`,
       );
       return;
     }
-
+  
     if (!(await isLocalAiModelInstalled())) {
       Alert.alert('Local AI setup needed', LOCAL_AI_NOT_INSTALLED_MESSAGE);
       return;
     }
-
+  
     setCondenseError('');
     setIsCondensingMessage(true);
-
+  
     try {
       const result = await condenseOutgoingMessage(originalDraft);
-
+  
+      console.log('Condensed message generated:', {
+        originalCharacterCount: result.originalCharacterCount,
+        condensedCharacterCount: result.condensedCharacterCount,
+        reductionPercent: result.reductionPercent,
+      });
+  
       setCondensedResult(result);
       setEditableCondensedText(result.condensedText);
       setIsCondensePreviewVisible(true);
-      setIsCondenseOfferDismissed(true);
     } catch (condenseFailure) {
       const message =
         condenseFailure instanceof Error
           ? condenseFailure.message
           : 'Could not shorten this message right now.';
-
+  
       console.warn('Outgoing message condensation failed:', condenseFailure);
       setCondenseError(message);
     } finally {
       setIsCondensingMessage(false);
     }
   }
-
+  
   function handleDismissCondenseOffer() {
     setCondenseError('');
-    setIsCondenseOfferDismissed(true);
+    setDismissedCondenseDraft(draft.trim());
   }
-
+  
   function handleKeepOriginalDraft() {
     Keyboard.dismiss();
     setIsCondensePreviewVisible(false);
     setCondensedResult(null);
     setEditableCondensedText('');
     setCondenseError('');
-    setIsCondenseOfferDismissed(true);
+    setDismissedCondenseDraft(draft.trim());
   }
-
+  
   function handleUseCondensedDraft() {
     const approvedCondensedText = editableCondensedText.trim();
-
+  
     if (!condensedResult || !approvedCondensedText) {
       setCondenseError('The shortened message cannot be empty.');
       return;
     }
-
+  
     if (
       approvedCondensedText.length >= condensedResult.originalCharacterCount
     ) {
@@ -545,11 +554,11 @@ export default function ChatScreen({ navigation, route }: Props) {
       );
       return;
     }
-
+  
     Keyboard.dismiss();
     setDraft(approvedCondensedText);
-    setHasAppliedCondensedDraft(true);
-    setIsCondenseOfferDismissed(true);
+    setAppliedCondensedDraft(approvedCondensedText);
+    setDismissedCondenseDraft('');
     setCondenseError('');
     setIsCondensePreviewVisible(false);
     setCondensedResult(null);
@@ -893,6 +902,11 @@ export default function ChatScreen({ navigation, route }: Props) {
           />
         )}
 
+{draft.trim().length > 0 && (
+  <Text style={styles.condenseDebugText}>
+    Draft length: {draft.trim().length} / {MIN_CHARACTERS_FOR_CONDENSE}
+  </Text>
+)}
 {shouldOfferCondense && (
           <View style={styles.condenseBanner}>
             <View style={styles.condenseBannerContent}>
@@ -2046,4 +2060,11 @@ const styles = StyleSheet.create({
   condenseDisabledButton: {
     opacity: 0.45,
   },
+  condenseDebugText: {
+    color: '#8AA398',
+    fontSize: 12,
+    marginBottom: 6,
+    marginHorizontal: 12,
+    textAlign: 'right',
+  }
 });
