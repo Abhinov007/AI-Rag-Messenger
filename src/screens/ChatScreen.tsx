@@ -37,9 +37,16 @@ import {
   LOCAL_AI_NOT_INSTALLED_MESSAGE,
 } from '../ai/localAiModel';
 import {
+  answerQuestionFromRetrievedMessages,
+  calculateDraftReductionPercent,
+  condenseOutgoingMessage,
+  MIN_CHARACTERS_FOR_CONDENSE,
   suggestRepliesForRecentMessages,
   summarizeRecentMessages,
+  type CondensedOutgoingMessageResult,
+  type RagAnswerResult,
 } from '../ai/localLlamaAssistant';
+
 import { getConversationById } from '../db/conversationRepository';
 import {
   addMessage,
@@ -52,10 +59,7 @@ import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 import { searchConversationMessages } from '../services/ragSearch';
-import {
-  answerQuestionFromRetrievedMessages,
-  type RagAnswerResult,
-} from '../ai/localLlamaAssistant';
+
 
 
 
@@ -106,6 +110,41 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [isGeneratingRagAnswer, setIsGeneratingRagAnswer] = useState(false);
   const [pendingAskChatOpen, setPendingAskChatOpen] = useState(false);
 
+  const [isCondensingMessage, setIsCondensingMessage] = useState(false);
+  const [isCondensePreviewVisible, setIsCondensePreviewVisible] =
+    useState(false);
+  const [condenseError, setCondenseError] = useState('');
+  const [condensedResult, setCondensedResult] =
+    useState<CondensedOutgoingMessageResult | null>(null);
+  const [editableCondensedText, setEditableCondensedText] = useState('');
+  const [isCondenseOfferDismissed, setIsCondenseOfferDismissed] =
+    useState(false);
+  const [hasAppliedCondensedDraft, setHasAppliedCondensedDraft] =
+    useState(false);
+
+  const trimmedDraft = draft.trim();
+
+  const shouldOfferCondense =
+    trimmedDraft.length >= MIN_CHARACTERS_FOR_CONDENSE &&
+    !isCondenseOfferDismissed &&
+    !hasAppliedCondensedDraft &&
+    !isCondensingMessage &&
+    !isCondensePreviewVisible;
+
+  const editedCondensedCharacterCount = editableCondensedText.trim().length;
+
+  const editedReductionPercent = condensedResult
+    ? calculateDraftReductionPercent(
+        condensedResult.originalCharacterCount,
+        editedCondensedCharacterCount,
+      )
+    : 0;
+
+  const canUseCondensedDraft =
+    Boolean(condensedResult) &&
+    editedCondensedCharacterCount > 0 &&
+    editedCondensedCharacterCount <
+      (condensedResult?.originalCharacterCount ?? 0);
   useEffect(() => {
     getTokenRef.current = getToken;
   }, [getToken]);
@@ -409,18 +448,132 @@ export default function ChatScreen({ navigation, route }: Props) {
     };
   }, [conversationId, userId]);
 
+  function resetCondenseComposerState() {
+    setIsCondensingMessage(false);
+    setIsCondensePreviewVisible(false);
+    setCondenseError('');
+    setCondensedResult(null);
+    setEditableCondensedText('');
+    setIsCondenseOfferDismissed(false);
+    setHasAppliedCondensedDraft(false);
+  }
+
+  function handleDraftChange(text: string) {
+    setDraft(text);
+    setCondenseError('');
+
+    if (text.trim().length === 0) {
+      resetCondenseComposerState();
+      return;
+    }
+
+    /*
+     * Once the user changes an already accepted condensed draft substantially,
+     * allow the feature to be offered again if it becomes long.
+     */
+    if (hasAppliedCondensedDraft && text.trim().length >= MIN_CHARACTERS_FOR_CONDENSE) {
+      setHasAppliedCondensedDraft(false);
+      setIsCondenseOfferDismissed(false);
+    }
+  }
+
+  async function handleCondenseOutgoingDraft() {
+    const originalDraft = draft.trim();
+
+    if (originalDraft.length < MIN_CHARACTERS_FOR_CONDENSE) {
+      setCondenseError(
+        `Type at least ${MIN_CHARACTERS_FOR_CONDENSE} characters before condensing.`,
+      );
+      return;
+    }
+
+    if (!(await isLocalAiModelInstalled())) {
+      Alert.alert('Local AI setup needed', LOCAL_AI_NOT_INSTALLED_MESSAGE);
+      return;
+    }
+
+    setCondenseError('');
+    setIsCondensingMessage(true);
+
+    try {
+      const result = await condenseOutgoingMessage(originalDraft);
+
+      setCondensedResult(result);
+      setEditableCondensedText(result.condensedText);
+      setIsCondensePreviewVisible(true);
+      setIsCondenseOfferDismissed(true);
+    } catch (condenseFailure) {
+      const message =
+        condenseFailure instanceof Error
+          ? condenseFailure.message
+          : 'Could not shorten this message right now.';
+
+      console.warn('Outgoing message condensation failed:', condenseFailure);
+      setCondenseError(message);
+    } finally {
+      setIsCondensingMessage(false);
+    }
+  }
+
+  function handleDismissCondenseOffer() {
+    setCondenseError('');
+    setIsCondenseOfferDismissed(true);
+  }
+
+  function handleKeepOriginalDraft() {
+    Keyboard.dismiss();
+    setIsCondensePreviewVisible(false);
+    setCondensedResult(null);
+    setEditableCondensedText('');
+    setCondenseError('');
+    setIsCondenseOfferDismissed(true);
+  }
+
+  function handleUseCondensedDraft() {
+    const approvedCondensedText = editableCondensedText.trim();
+
+    if (!condensedResult || !approvedCondensedText) {
+      setCondenseError('The shortened message cannot be empty.');
+      return;
+    }
+
+    if (
+      approvedCondensedText.length >= condensedResult.originalCharacterCount
+    ) {
+      setCondenseError(
+        'The edited version must be shorter than your original message.',
+      );
+      return;
+    }
+
+    Keyboard.dismiss();
+    setDraft(approvedCondensedText);
+    setHasAppliedCondensedDraft(true);
+    setIsCondenseOfferDismissed(true);
+    setCondenseError('');
+    setIsCondensePreviewVisible(false);
+    setCondensedResult(null);
+    setEditableCondensedText('');
+  }
+
   async function handleSend() {
     const text = draft.trim();
 
-    if (!text || isSending) {
+    if (!text || isSending || isCondensingMessage) {
       return;
     }
 
     setIsSending(true);
-    setDraft('');
 
     try {
       const messageId = await addMessage(conversationId, 'user', text, userId);
+
+      /*
+       * Only clear the composer after SQLite successfully stores the message.
+       * This prevents losing the user's draft if local saving fails.
+       */
+      setDraft('');
+      resetCondenseComposerState();
 
       await loadThread();
       scrollToBottom(true);
@@ -740,6 +893,60 @@ export default function ChatScreen({ navigation, route }: Props) {
           />
         )}
 
+{shouldOfferCondense && (
+          <View style={styles.condenseBanner}>
+            <View style={styles.condenseBannerContent}>
+              <Text style={styles.condenseBannerTitle}>
+                Long message detected
+              </Text>
+
+              <Text style={styles.condenseBannerDescription}>
+                Shorten it locally with AI before sending to reduce message
+                size.
+              </Text>
+            </View>
+
+            <View style={styles.condenseBannerActions}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                disabled={isCondensingMessage}
+                onPress={handleCondenseOutgoingDraft}
+                style={styles.condensePrimaryButton}
+              >
+                <Text style={styles.condensePrimaryButtonText}>
+                  Condense
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.85}
+                disabled={isCondensingMessage}
+                onPress={handleDismissCondenseOffer}
+                style={styles.condenseDismissButton}
+              >
+                <Text style={styles.condenseDismissButtonText}>
+                  Dismiss
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {isCondensingMessage && (
+          <View style={styles.condenseLoadingBanner}>
+            <ActivityIndicator color="#25D366" size="small" />
+            <Text style={styles.condenseLoadingText}>
+              Shortening your message locally...
+            </Text>
+          </View>
+        )}
+
+        {condenseError.length > 0 && !isCondensePreviewVisible && (
+          <View style={styles.condenseErrorBanner}>
+            <Text style={styles.condenseErrorText}>{condenseError}</Text>
+          </View>
+        )}
+
         <View
           style={[
             styles.composer,
@@ -749,9 +956,13 @@ export default function ChatScreen({ navigation, route }: Props) {
           ]}
         >
           <TextInput
-            editable={!(isLoading && messages.length === 0) && !Boolean(error)}
+            editable={
+              !(isLoading && messages.length === 0) &&
+              !Boolean(error) &&
+              !isCondensingMessage
+            }
             multiline
-            onChangeText={setDraft}
+            onChangeText={handleDraftChange}
             placeholder="Message"
             placeholderTextColor="#789185"
             style={styles.input}
@@ -760,15 +971,25 @@ export default function ChatScreen({ navigation, route }: Props) {
 
           <TouchableOpacity
             activeOpacity={0.78}
-            disabled={isSending || !draft.trim() || Boolean(error)}
+            disabled={
+              isSending ||
+              isCondensingMessage ||
+              !draft.trim() ||
+              Boolean(error)
+            }
             onPress={handleSend}
             style={[
               styles.sendBtn,
-              (isSending || !draft.trim() || Boolean(error)) &&
+              (isSending ||
+                isCondensingMessage ||
+                !draft.trim() ||
+                Boolean(error)) &&
                 styles.sendBtnDisabled,
             ]}
           >
-            <Text style={styles.sendLabel}>{isSending ? '...' : 'Send'}</Text>
+            <Text style={styles.sendLabel}>
+              {isSending ? '...' : 'Send'}
+            </Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -975,6 +1196,137 @@ export default function ChatScreen({ navigation, route }: Props) {
     </Pressable>
   </KeyboardAvoidingView>
 </Modal>
+
+            <Modal
+        animationType="slide"
+        onRequestClose={handleKeepOriginalDraft}
+        transparent
+        visible={isCondensePreviewVisible}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.condenseKeyboardAvoiding}
+        >
+          <View style={styles.condenseModalBackdrop}>
+            <View style={styles.condenseModal}>
+              <Text style={styles.condenseModalTitle}>
+                Condensed message preview
+              </Text>
+
+              <Text style={styles.condenseModalSubtitle}>
+                Generated locally on your phone. Review and edit before
+                sending.
+              </Text>
+
+              {condensedResult && (
+                <>
+                  <View style={styles.condenseStatsRow}>
+                    <View style={styles.condenseStatCard}>
+                      <Text style={styles.condenseStatValue}>
+                        {condensedResult.originalCharacterCount}
+                      </Text>
+                      <Text style={styles.condenseStatLabel}>
+                        Original chars
+                      </Text>
+                    </View>
+
+                    <View style={styles.condenseStatCard}>
+                      <Text style={styles.condenseStatValue}>
+                        {editedCondensedCharacterCount}
+                      </Text>
+                      <Text style={styles.condenseStatLabel}>
+                        New chars
+                      </Text>
+                    </View>
+
+                    <View style={styles.condenseStatCard}>
+                      <Text style={styles.condenseStatValue}>
+                        {editedReductionPercent}%
+                      </Text>
+                      <Text style={styles.condenseStatLabel}>
+                        Reduced
+                      </Text>
+                    </View>
+                  </View>
+
+                  <ScrollView
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                    style={styles.condensePreviewScroll}
+                  >
+                    <Text style={styles.condenseSectionLabel}>Original</Text>
+
+                    <View style={styles.condenseOriginalCard}>
+                      <Text style={styles.condenseOriginalText}>
+                        {condensedResult.originalText}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.condenseSectionLabel}>
+                      AI-condensed message
+                    </Text>
+
+                    <TextInput
+                      editable={!isCondensingMessage}
+                      multiline
+                      onChangeText={(text) => {
+                        setEditableCondensedText(text);
+                        setCondenseError('');
+                      }}
+                      placeholder="Shortened message"
+                      placeholderTextColor="#789185"
+                      style={styles.condenseEditableInput}
+                      textAlignVertical="top"
+                      value={editableCondensedText}
+                    />
+
+                    {!canUseCondensedDraft &&
+                      editableCondensedText.trim().length > 0 && (
+                        <Text style={styles.condenseInlineWarning}>
+                          The edited version must stay shorter than the
+                          original.
+                        </Text>
+                      )}
+
+                    {condenseError.length > 0 && (
+                      <Text style={styles.condenseInlineWarning}>
+                        {condenseError}
+                      </Text>
+                    )}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    disabled={!canUseCondensedDraft}
+                    onPress={handleUseCondensedDraft}
+                    style={[
+                      styles.condenseUseButton,
+                      !canUseCondensedDraft &&
+                        styles.condenseDisabledButton,
+                    ]}
+                  >
+                    <Text style={styles.condenseUseButtonText}>
+                      Use Condensed Version
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={handleKeepOriginalDraft}
+                    style={styles.condenseKeepButton}
+                  >
+                    <Text style={styles.condenseKeepButtonText}>
+                      Keep Original Message
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Modal
         animationType="slide"
         onRequestClose={() => setIsSummaryVisible(false)}
@@ -1485,5 +1837,213 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.45)',
     flex: 1,
     justifyContent: 'flex-end',
+  },
+  condenseBanner: {
+    backgroundColor: '#102820',
+    borderColor: '#1D6B52',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 8,
+    marginHorizontal: 12,
+    padding: 12,
+  },
+  condenseBannerContent: {
+    marginBottom: 10,
+  },
+  condenseBannerTitle: {
+    color: '#E8F5EF',
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  condenseBannerDescription: {
+    color: '#A6BBB1',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  condenseBannerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  condensePrimaryButton: {
+    backgroundColor: '#25D366',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  condensePrimaryButtonText: {
+    color: '#071A14',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  condenseDismissButton: {
+    backgroundColor: '#17382D',
+    borderColor: '#1D6B52',
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  condenseDismissButtonText: {
+    color: '#A6BBB1',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  condenseLoadingBanner: {
+    alignItems: 'center',
+    backgroundColor: '#102820',
+    borderColor: '#1D6B52',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+    marginHorizontal: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  condenseLoadingText: {
+    color: '#A6BBB1',
+    fontSize: 13,
+  },
+  condenseErrorBanner: {
+    backgroundColor: '#341A1A',
+    borderColor: '#7F3535',
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 8,
+    marginHorizontal: 12,
+    padding: 10,
+  },
+  condenseErrorText: {
+    color: '#FFB4A8',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  condenseKeyboardAvoiding: {
+    flex: 1,
+  },
+  condenseModalBackdrop: {
+    backgroundColor: 'rgba(3, 10, 8, 0.72)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  condenseModal: {
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    maxHeight: '92%',
+    padding: 20,
+    paddingBottom: 24,
+  },
+  condenseModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  condenseModalSubtitle: {
+    color: '#A6BBB1',
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  condenseStatsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  condenseStatCard: {
+    alignItems: 'center',
+    backgroundColor: '#17382D',
+    borderRadius: 12,
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+  },
+  condenseStatValue: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  condenseStatLabel: {
+    color: '#8AA398',
+    fontSize: 11,
+    marginTop: 3,
+    textAlign: 'center',
+  },
+  condensePreviewScroll: {
+    marginBottom: 14,
+    maxHeight: 400,
+  },
+  condenseSectionLabel: {
+    color: '#8AA398',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginBottom: 7,
+    marginTop: 8,
+    textTransform: 'uppercase',
+  },
+  condenseOriginalCard: {
+    backgroundColor: '#071A14',
+    borderColor: '#1D3B31',
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 12,
+    padding: 11,
+  },
+  condenseOriginalText: {
+    color: '#A6BBB1',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  condenseEditableInput: {
+    backgroundColor: '#071A14',
+    borderColor: '#1D6B52',
+    borderRadius: 12,
+    borderWidth: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 21,
+    minHeight: 100,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  condenseInlineWarning: {
+    color: '#FFB4A8',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
+  },
+  condenseUseButton: {
+    alignItems: 'center',
+    backgroundColor: '#25D366',
+    borderRadius: 13,
+    marginBottom: 9,
+    paddingVertical: 13,
+  },
+  condenseUseButtonText: {
+    color: '#071A14',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  condenseKeepButton: {
+    alignItems: 'center',
+    backgroundColor: '#17382D',
+    borderColor: '#1D3B31',
+    borderRadius: 13,
+    borderWidth: 1,
+    paddingVertical: 13,
+  },
+  condenseKeepButtonText: {
+    color: '#E8F5EF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  condenseDisabledButton: {
+    opacity: 0.45,
   },
 });

@@ -37,13 +37,13 @@ const MAX_REPLY_MESSAGE_LENGTH = 320;
 const MAX_REPLY_TRANSCRIPT_CHARACTERS = 3600;
 const MAX_SUGGESTION_LENGTH = 120;
 
-const MIN_CHARACTERS_FOR_CONDENSE = 250;
-const MAX_CHARACTERS_FOR_SINGLE_CONDENSE_REQUEST = 3600;
-const MIN_USEFUL_REDUCTION_PERCENT = 10;
+export const MIN_CHARACTERS_FOR_CONDENSE = 250;
+export const MAX_CHARACTERS_FOR_SINGLE_CONDENSE_REQUEST = 3600;
+export const MIN_USEFUL_REDUCTION_PERCENT = 10;
 
 let generationQueue: Promise<unknown> = Promise.resolve();
 
-function calculateReductionPercent(
+export function calculateDraftReductionPercent(
   originalCharacterCount: number,
   condensedCharacterCount: number,
 ): number {
@@ -581,7 +581,7 @@ export async function condenseOutgoingMessage(
     );
   }
 
-  const reductionPercent = calculateReductionPercent(
+  const reductionPercent = calculateDraftReductionPercent(
     originalCharacterCount,
     condensedCharacterCount,
   );
