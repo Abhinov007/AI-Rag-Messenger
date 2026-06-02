@@ -37,7 +37,36 @@ const MAX_REPLY_MESSAGE_LENGTH = 320;
 const MAX_REPLY_TRANSCRIPT_CHARACTERS = 3600;
 const MAX_SUGGESTION_LENGTH = 120;
 
+const MIN_CHARACTERS_FOR_CONDENSE = 250;
+const MAX_CHARACTERS_FOR_SINGLE_CONDENSE_REQUEST = 3600;
+const MIN_USEFUL_REDUCTION_PERCENT = 10;
+
 let generationQueue: Promise<unknown> = Promise.resolve();
+
+function calculateReductionPercent(
+  originalCharacterCount: number,
+  condensedCharacterCount: number,
+): number {
+  if (originalCharacterCount <= 0) {
+    return 0;
+  }
+
+  return Math.round(
+    ((originalCharacterCount - condensedCharacterCount) /
+      originalCharacterCount) *
+      100,
+  );
+}
+
+function cleanCondensedDraft(rawText: string): string {
+  return rawText
+    .trim()
+    .replace(/^condensed message:\s*/i, '')
+    .replace(/^shortened message:\s*/i, '')
+    .replace(/^rewritten message:\s*/i, '')
+    .replace(/^["']|["']$/g, '')
+    .trim();
+}
 
 /**
  * The shared Llama context should run only one generation request at a time.
@@ -456,5 +485,127 @@ export async function answerQuestionFromRetrievedMessages(
   return {
     answer,
     sources,
+  };
+}
+
+export type CondensedOutgoingMessageResult = {
+  originalText: string;
+  condensedText: string;
+  originalCharacterCount: number;
+  condensedCharacterCount: number;
+  reductionPercent: number;
+};
+
+export async function condenseOutgoingMessage(
+  originalMessage: string,
+): Promise<CondensedOutgoingMessageResult> {
+  const originalText = originalMessage.trim();
+
+  if (!originalText) {
+    throw new Error('Enter a message before trying to shorten it.');
+  }
+
+  if (originalText.length < MIN_CHARACTERS_FOR_CONDENSE) {
+    throw new Error(
+      `This message is already short. Condense messages longer than ${MIN_CHARACTERS_FOR_CONDENSE} characters.`,
+    );
+  }
+
+  if (originalText.length > MAX_CHARACTERS_FOR_SINGLE_CONDENSE_REQUEST) {
+    throw new Error(
+      'This draft is too long to condense safely in one pass. Please shorten it slightly or split it into multiple messages.',
+    );
+  }
+
+  const originalCharacterCount = originalText.length;
+  const targetCharacterCount = Math.max(
+    80,
+    Math.round(originalCharacterCount * 0.45),
+  );
+
+  if (__DEV__) {
+    console.log('Outgoing message condensation requested:', {
+      originalCharacterCount,
+      targetCharacterCount,
+    });
+  }
+
+  const context = await getLocalLlamaContext();
+
+  const result = await runGenerationTask(() =>
+    context.completion({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You shorten an outgoing text message before it is sent.',
+            'Preserve all essential facts and meaning.',
+            'Preserve names, dates, times, locations, numbers, amounts, links, requests, commitments, warnings, and instructions exactly.',
+            'Do not invent information.',
+            'Do not change who performed an action.',
+            'Do not remove information the recipient needs.',
+            'Keep the sender\'s tone natural.',
+            'Return only the shortened message with no heading, quotes, explanation, or bullet points.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Shorten the message below to about ${targetCharacterCount} characters or fewer, only if the meaning can be safely preserved.`,
+            '',
+            '<ORIGINAL_MESSAGE>',
+            originalText,
+            '</ORIGINAL_MESSAGE>',
+          ].join('\n'),
+        },
+      ],
+      n_predict: 240,
+      temperature: 0.1,
+      top_k: 20,
+      top_p: 0.9,
+      stop: STOP_WORDS,
+    }),
+  );
+
+  const condensedText = cleanCondensedDraft(result.text);
+
+  if (!condensedText) {
+    throw new Error('The local model returned an empty shortened message.');
+  }
+
+  const condensedCharacterCount = condensedText.length;
+
+  if (condensedCharacterCount >= originalCharacterCount) {
+    throw new Error(
+      'The generated version was not shorter than your original message.',
+    );
+  }
+
+  const reductionPercent = calculateReductionPercent(
+    originalCharacterCount,
+    condensedCharacterCount,
+  );
+
+  if (reductionPercent < MIN_USEFUL_REDUCTION_PERCENT) {
+    throw new Error(
+      'The generated version did not reduce the message size enough to be useful.',
+    );
+  }
+
+  if (__DEV__) {
+    console.log('Outgoing message condensed locally:', {
+      originalCharacterCount,
+      condensedCharacterCount,
+      reductionPercent,
+      condensedText,
+    });
+  }
+
+  return {
+    originalText,
+    condensedText,
+    originalCharacterCount,
+    condensedCharacterCount,
+    reductionPercent,
   };
 }
