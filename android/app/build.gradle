@@ -91,9 +91,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.anonymous.AIRagMessenger'
+    namespace 'com.abhinov.airagmessenger'
     defaultConfig {
-        applicationId 'com.anonymous.AIRagMessenger'
+        applicationId 'com.abhinov.airagmessenger'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -133,22 +133,10 @@ android {
         jniLibs {
             def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
             useLegacyPackaging enableLegacyPackaging.toBoolean()
-            /*
-             * Keep the APK small by shipping the generic arm64 llama.rn runtime
-             * only. The optimized CPU/OpenCL/Hexagon variants add tens of MB
-             * each; RNLlama falls back to librnllama_jni/librnllama when the
-             * optimized variants are absent.
-             */
-            excludes += [
-                "**/librnllama_v8*.so",
-                "**/librnllama_x86_64.so",
-                "**/librnllama_jni_v8*.so",
-                "**/librnllama_jni_x86_64.so"
-            ]
         }
     }
     androidResources {
-        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~:ggml-hexagon:ggml-hexagon/*'
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
 }
 

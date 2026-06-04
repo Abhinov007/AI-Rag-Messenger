@@ -1,4 +1,4 @@
-package com.anonymous.AIRagMessenger
+package com.abhinov.airagmessenger
 
 import android.app.Application
 import android.content.res.Configuration

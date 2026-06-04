@@ -117,36 +117,32 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [condensedResult, setCondensedResult] =
     useState<CondensedOutgoingMessageResult | null>(null);
   const [editableCondensedText, setEditableCondensedText] = useState('');
-  
+
   /*
-   * Track the actual draft text that was dismissed or accepted.
-   * This prevents the feature from remaining hidden after the user edits
-   * the message into a new long draft.
+   * Remember the exact text dismissed or accepted, rather than hiding the
+   * feature permanently after one click.
    */
   const [dismissedCondenseDraft, setDismissedCondenseDraft] = useState('');
   const [appliedCondensedDraft, setAppliedCondensedDraft] = useState('');
-  
+
   const trimmedDraft = draft.trim();
-  
-  const isLongDraft =
-    trimmedDraft.length >= MIN_CHARACTERS_FOR_CONDENSE;
-  
+
   const shouldOfferCondense =
-    isLongDraft &&
+    trimmedDraft.length >= MIN_CHARACTERS_FOR_CONDENSE &&
     trimmedDraft !== dismissedCondenseDraft &&
     trimmedDraft !== appliedCondensedDraft &&
     !isCondensingMessage &&
     !isCondensePreviewVisible;
-  
+
   const editedCondensedCharacterCount = editableCondensedText.trim().length;
-  
+
   const editedReductionPercent = condensedResult
     ? calculateDraftReductionPercent(
         condensedResult.originalCharacterCount,
         editedCondensedCharacterCount,
       )
     : 0;
-  
+
   const canUseCondensedDraft =
     Boolean(condensedResult) &&
     editedCondensedCharacterCount > 0 &&
@@ -466,48 +462,48 @@ export default function ChatScreen({ navigation, route }: Props) {
     setDismissedCondenseDraft('');
     setAppliedCondensedDraft('');
   }
-  
+
   function handleDraftChange(text: string) {
     setDraft(text);
     setCondenseError('');
-  
+
     if (text.trim().length === 0) {
       resetCondenseComposerState();
     }
   }
-  
+
   async function handleCondenseOutgoingDraft() {
     const originalDraft = draft.trim();
-  
-    console.log('Condense requested:', {
+
+    console.log('Condense button tapped:', {
       draftLength: originalDraft.length,
       threshold: MIN_CHARACTERS_FOR_CONDENSE,
     });
-  
+
     if (originalDraft.length < MIN_CHARACTERS_FOR_CONDENSE) {
       setCondenseError(
         `Type at least ${MIN_CHARACTERS_FOR_CONDENSE} characters before condensing.`,
       );
       return;
     }
-  
+
     if (!(await isLocalAiModelInstalled())) {
       Alert.alert('Local AI setup needed', LOCAL_AI_NOT_INSTALLED_MESSAGE);
       return;
     }
-  
+
     setCondenseError('');
     setIsCondensingMessage(true);
-  
+
     try {
       const result = await condenseOutgoingMessage(originalDraft);
-  
+
       console.log('Condensed message generated:', {
         originalCharacterCount: result.originalCharacterCount,
         condensedCharacterCount: result.condensedCharacterCount,
         reductionPercent: result.reductionPercent,
       });
-  
+
       setCondensedResult(result);
       setEditableCondensedText(result.condensedText);
       setIsCondensePreviewVisible(true);
@@ -516,19 +512,19 @@ export default function ChatScreen({ navigation, route }: Props) {
         condenseFailure instanceof Error
           ? condenseFailure.message
           : 'Could not shorten this message right now.';
-  
+
       console.warn('Outgoing message condensation failed:', condenseFailure);
       setCondenseError(message);
     } finally {
       setIsCondensingMessage(false);
     }
   }
-  
+
   function handleDismissCondenseOffer() {
     setCondenseError('');
     setDismissedCondenseDraft(draft.trim());
   }
-  
+
   function handleKeepOriginalDraft() {
     Keyboard.dismiss();
     setIsCondensePreviewVisible(false);
@@ -537,15 +533,15 @@ export default function ChatScreen({ navigation, route }: Props) {
     setCondenseError('');
     setDismissedCondenseDraft(draft.trim());
   }
-  
+
   function handleUseCondensedDraft() {
     const approvedCondensedText = editableCondensedText.trim();
-  
+
     if (!condensedResult || !approvedCondensedText) {
       setCondenseError('The shortened message cannot be empty.');
       return;
     }
-  
+
     if (
       approvedCondensedText.length >= condensedResult.originalCharacterCount
     ) {
@@ -554,7 +550,7 @@ export default function ChatScreen({ navigation, route }: Props) {
       );
       return;
     }
-  
+
     Keyboard.dismiss();
     setDraft(approvedCondensedText);
     setAppliedCondensedDraft(approvedCondensedText);
