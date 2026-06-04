@@ -1,14 +1,13 @@
 /**
- * Chat list and contacts screen.
+ * Chat list screen.
  *
- * This screen shows saved contacts as conversations. Users can:
- * - open a chat
- * - rename a saved contact
- * - delete a saved contact and its local chat history
+ * After authentication, this screen renders the conversation list from local
+ * SQLite storage initialized by the app root.
+ *
+ * Feature 3:
+ * Users can save or change the display name of another person locally,
+ * without changing the other user's actual profile name.
  */
-import { useAuth } from '@clerk/expo';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -23,22 +22,57 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useAuth } from '@clerk/expo';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import ConversationItem from '../components/ConversationItem';
 import ProfileSummary from '../components/ProfileSummary';
+import ConversationItem from '../components/ConversationItem';
 import {
-  deleteContactAndConversation,
-  renameSavedContact,
+  getContactsForUser,
+  normalizeEmail,
+  renameContactLocally,
 } from '../db/contactsRepository';
 import { listConversations } from '../db/conversationRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteConversations } from '../services/conversationPull';
 import type { ConversationListItem } from '../types/conversation';
+import type { Contact } from '../types/contacts';
 
 type Props = {
   onLogout: () => void;
 };
+
+function applySavedContactNames(
+  conversations: ConversationListItem[],
+  contacts: Contact[],
+): ConversationListItem[] {
+  const savedNameByEmail = new Map<string, string>();
+
+  contacts.forEach(contact => {
+    savedNameByEmail.set(contact.normalizedEmail, contact.name);
+  });
+
+  return conversations.map(conversation => {
+    if (!conversation.contactEmail) {
+      return conversation;
+    }
+
+    const savedName = savedNameByEmail.get(
+      normalizeEmail(conversation.contactEmail),
+    );
+
+    if (!savedName) {
+      return conversation;
+    }
+
+    return {
+      ...conversation,
+      title: savedName,
+    };
+  });
+}
 
 export default function ChatListScreen({ onLogout }: Props) {
   const navigation =
@@ -55,15 +89,9 @@ export default function ChatListScreen({ onLogout }: Props) {
 
   const [selectedConversation, setSelectedConversation] =
     useState<ConversationListItem | null>(null);
-
-  const [isActionMenuVisible, setIsActionMenuVisible] = useState(false);
   const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [isSavingRename, setIsSavingRename] = useState(false);
-
-  const [deletingConversationId, setDeletingConversationId] = useState<
-    ConversationListItem['id'] | null
-  >(null);
 
   const isFirstListFocus = useRef(true);
   const isLoadingConversationsRef = useRef(false);
@@ -114,29 +142,24 @@ export default function ChatListScreen({ onLogout }: Props) {
     navigation.navigate('Settings');
   }, [navigation]);
 
-  const handleOpenActions = useCallback(
+  const handleOpenRenameModal = useCallback(
     (conversation: ConversationListItem) => {
       Keyboard.dismiss();
+
+      if (!conversation.contactEmail) {
+        Alert.alert(
+          'Rename unavailable',
+          'This conversation does not have a saved email address.',
+        );
+        return;
+      }
+
       setSelectedConversation(conversation);
-      setIsActionMenuVisible(true);
+      setRenameValue(conversation.title ?? '');
+      setIsRenameModalVisible(true);
     },
     [],
   );
-
-  const handleCloseActions = useCallback(() => {
-    setIsActionMenuVisible(false);
-    setSelectedConversation(null);
-  }, []);
-
-  const handleOpenRenameModal = useCallback(() => {
-    if (!selectedConversation) {
-      return;
-    }
-
-    setRenameValue(selectedConversation.title ?? '');
-    setIsActionMenuVisible(false);
-    setIsRenameModalVisible(true);
-  }, [selectedConversation]);
 
   const handleCloseRenameModal = useCallback(() => {
     if (isSavingRename) {
@@ -145,37 +168,28 @@ export default function ChatListScreen({ onLogout }: Props) {
 
     Keyboard.dismiss();
     setIsRenameModalVisible(false);
-    setRenameValue('');
     setSelectedConversation(null);
+    setRenameValue('');
   }, [isSavingRename]);
 
   const handleSaveRename = async () => {
-    const savedName = renameValue.trim();
-
-    if (!userId || !selectedConversation) {
+    if (!userId || !selectedConversation?.contactEmail) {
       return;
     }
+
+    const savedName = renameValue.trim();
 
     if (!savedName) {
       Alert.alert('Name required', 'Enter a name for this contact.');
       return;
     }
 
-    if (!selectedConversation.contactEmail) {
-      Alert.alert(
-        'Rename failed',
-        'This chat does not have a saved contact email.',
-      );
-      return;
-    }
-
     try {
       setIsSavingRename(true);
 
-      await renameSavedContact(
+      await renameContactLocally(
         userId,
         selectedConversation.contactEmail,
-        selectedConversation.id,
         savedName,
       );
 
@@ -192,8 +206,10 @@ export default function ChatListScreen({ onLogout }: Props) {
 
       Keyboard.dismiss();
       setIsRenameModalVisible(false);
-      setRenameValue('');
       setSelectedConversation(null);
+      setRenameValue('');
+
+      Alert.alert('Saved', 'Contact name updated successfully.');
     } catch (renameError) {
       console.error('Failed to rename saved contact:', renameError);
 
@@ -201,84 +217,12 @@ export default function ChatListScreen({ onLogout }: Props) {
         'Rename failed',
         renameError instanceof Error
           ? renameError.message
-          : 'Unable to save the new contact name. Please try again.',
+          : 'Unable to save the contact name.',
       );
     } finally {
       setIsSavingRename(false);
     }
   };
-
-  const handleDeleteContactAndChat = useCallback(() => {
-    if (!userId || !selectedConversation) {
-      return;
-    }
-
-    const conversationToDelete = selectedConversation;
-    const contactEmail = conversationToDelete.contactEmail;
-    const displayName =
-      conversationToDelete.title ?? contactEmail ?? 'this contact';
-
-    setIsActionMenuVisible(false);
-
-    if (!contactEmail) {
-      Alert.alert(
-        'Delete failed',
-        'This chat does not have a saved contact email.',
-      );
-
-      setSelectedConversation(null);
-      return;
-    }
-
-    Alert.alert(
-      'Delete contact and chat?',
-      `This will remove ${displayName} from your contacts and delete your chat history with them from this device. It will not delete the other person's chat.`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-          onPress: () => setSelectedConversation(null),
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setDeletingConversationId(conversationToDelete.id);
-
-              await deleteContactAndConversation(
-                userId,
-                contactEmail,
-                conversationToDelete.id,
-              );
-
-              setConversations(currentConversations =>
-                currentConversations.filter(
-                  conversation => conversation.id !== conversationToDelete.id,
-                ),
-              );
-
-              setSelectedConversation(null);
-            } catch (deleteError) {
-              console.error(
-                'Failed to delete contact and conversation:',
-                deleteError,
-              );
-
-              Alert.alert(
-                'Delete failed',
-                deleteError instanceof Error
-                  ? deleteError.message
-                  : 'Unable to delete this contact and chat. Please try again.',
-              );
-            } finally {
-              setDeletingConversationId(null);
-            }
-          },
-        },
-      ],
-    );
-  }, [selectedConversation, userId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -323,16 +267,29 @@ export default function ChatListScreen({ onLogout }: Props) {
               await pullRemoteConversations(userId, getClerkToken);
             } catch (pullError) {
               console.warn(
-                'Remote conversation pull failed, loading local chats only:',
+                'Remote conversation pull failed but local list will still load:',
                 pullError,
               );
             }
           }
 
-          const rows = await listConversations(userId);
+          const [conversationRows, savedContacts] = await Promise.all([
+            listConversations(userId),
+            getContactsForUser(userId),
+          ]);
+
+          const displayConversations = applySavedContactNames(
+            conversationRows,
+            savedContacts,
+          );
+
+          console.log('ChatList conversations loaded:', {
+            userId,
+            count: displayConversations.length,
+          });
 
           if (isMounted) {
-            setConversations(rows);
+            setConversations(displayConversations);
             setError('');
           }
         } catch (loadError) {
@@ -376,7 +333,7 @@ export default function ChatListScreen({ onLogout }: Props) {
             onPress={handleOpenSettings}
             style={({ pressed }) => [
               styles.settingsButton,
-              pressed && styles.buttonPressed,
+              pressed && styles.settingsButtonPressed,
             ]}
           >
             <Text style={styles.settingsIcon}>⚙</Text>
@@ -388,7 +345,7 @@ export default function ChatListScreen({ onLogout }: Props) {
             onPress={handleAddContact}
             style={({ pressed }) => [
               styles.addContactButton,
-              pressed && styles.buttonPressed,
+              pressed && styles.addContactButtonPressed,
             ]}
           >
             <Text style={styles.addContactIcon}>+</Text>
@@ -401,7 +358,7 @@ export default function ChatListScreen({ onLogout }: Props) {
             onPress={onLogout}
             style={({ pressed }) => [
               styles.logoutButton,
-              pressed && styles.buttonPressed,
+              pressed && styles.logoutButtonPressed,
             ]}
           >
             <Text style={styles.logoutText}>Logout</Text>
@@ -425,44 +382,34 @@ export default function ChatListScreen({ onLogout }: Props) {
         data={filteredConversations}
         keyboardShouldPersistTaps="handled"
         keyExtractor={item => String(item.id)}
-        renderItem={({ item }) => {
-          const isDeleting = deletingConversationId === item.id;
-
-          return (
-            <View style={styles.conversationRow}>
-              <View style={styles.conversationItemContainer}>
-                <ConversationItem
-                  conversation={item}
-                  onPress={() => handleOpenConversation(item)}
-                />
-              </View>
-
-              <Pressable
-                accessibilityLabel={`Options for ${
-                  item.title ?? item.contactEmail ?? 'contact'
-                }`}
-                accessibilityRole="button"
-                disabled={isDeleting}
-                onPress={() => handleOpenActions(item)}
-                style={({ pressed }) => [
-                  styles.moreButton,
-                  pressed && styles.moreButtonPressed,
-                  isDeleting && styles.disabledAction,
-                ]}
-              >
-                {isDeleting ? (
-                  <ActivityIndicator color="#25D366" size="small" />
-                ) : (
-                  <Text style={styles.moreButtonText}>⋮</Text>
-                )}
-              </Pressable>
+        renderItem={({ item }) => (
+          <View style={styles.conversationRow}>
+            <View style={styles.conversationItemWrap}>
+              <ConversationItem
+                conversation={item}
+                onPress={() => handleOpenConversation(item)}
+              />
             </View>
-          );
-        }}
+
+            <Pressable
+              accessibilityLabel={`Rename ${
+                item.title ?? item.contactEmail ?? 'contact'
+              }`}
+              accessibilityRole="button"
+              onPress={() => handleOpenRenameModal(item)}
+              style={({ pressed }) => [
+                styles.renameButton,
+                pressed && styles.renameButtonPressed,
+              ]}
+            >
+              <Text style={styles.renameButtonIcon}>✎</Text>
+            </Pressable>
+          </View>
+        )}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             {isLoading ? (
-              <ActivityIndicator color="#25D366" />
+              <ActivityIndicator color="#22C55E" />
             ) : (
               <>
                 <Text style={styles.emptyTitle}>
@@ -485,71 +432,6 @@ export default function ChatListScreen({ onLogout }: Props) {
 
       <Modal
         animationType="fade"
-        onRequestClose={handleCloseActions}
-        transparent
-        visible={isActionMenuVisible && selectedConversation !== null}
-      >
-        <Pressable
-          onPress={handleCloseActions}
-          style={styles.modalBackdrop}
-        >
-          <Pressable
-            onPress={event => event.stopPropagation()}
-            style={styles.actionSheet}
-          >
-            <Text style={styles.actionSheetTitle}>
-              {selectedConversation?.title ??
-                selectedConversation?.contactEmail ??
-                'Contact'}
-            </Text>
-
-            {selectedConversation?.contactEmail ? (
-              <Text style={styles.actionSheetSubtitle}>
-                {selectedConversation.contactEmail}
-              </Text>
-            ) : null}
-
-            <Pressable
-              accessibilityRole="button"
-              onPress={handleOpenRenameModal}
-              style={({ pressed }) => [
-                styles.actionButton,
-                pressed && styles.actionButtonPressed,
-              ]}
-            >
-              <Text style={styles.actionButtonText}>Rename contact</Text>
-            </Pressable>
-
-            <Pressable
-              accessibilityRole="button"
-              onPress={handleDeleteContactAndChat}
-              style={({ pressed }) => [
-                styles.actionButton,
-                styles.deleteActionButton,
-                pressed && styles.actionButtonPressed,
-              ]}
-            >
-              <Text style={styles.deleteActionText}>
-                Delete contact and chat
-              </Text>
-            </Pressable>
-
-            <Pressable
-              accessibilityRole="button"
-              onPress={handleCloseActions}
-              style={({ pressed }) => [
-                styles.cancelButton,
-                pressed && styles.actionButtonPressed,
-              ]}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <Modal
-        animationType="fade"
         onRequestClose={handleCloseRenameModal}
         transparent
         visible={isRenameModalVisible}
@@ -562,7 +444,11 @@ export default function ChatListScreen({ onLogout }: Props) {
             onPress={event => event.stopPropagation()}
             style={styles.renameCard}
           >
-            <Text style={styles.renameTitle}>Rename contact</Text>
+            <Text style={styles.renameTitle}>Save contact name</Text>
+
+            <Text style={styles.renameSubtitle}>
+              This name is private and visible only to you.
+            </Text>
 
             {selectedConversation?.contactEmail ? (
               <Text style={styles.renameEmail}>
@@ -590,7 +476,7 @@ export default function ChatListScreen({ onLogout }: Props) {
                 onPress={handleCloseRenameModal}
                 style={({ pressed }) => [
                   styles.renameCancelButton,
-                  pressed && styles.actionButtonPressed,
+                  pressed && styles.modalButtonPressed,
                 ]}
               >
                 <Text style={styles.renameCancelText}>Cancel</Text>
@@ -602,8 +488,8 @@ export default function ChatListScreen({ onLogout }: Props) {
                 onPress={() => void handleSaveRename()}
                 style={({ pressed }) => [
                   styles.renameSaveButton,
-                  pressed && styles.actionButtonPressed,
-                  isSavingRename && styles.disabledAction,
+                  pressed && styles.modalButtonPressed,
+                  isSavingRename && styles.renameSaveButtonDisabled,
                 ]}
               >
                 {isSavingRename ? (
@@ -622,19 +508,20 @@ export default function ChatListScreen({ onLogout }: Props) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#071A14',
     flex: 1,
+    backgroundColor: '#071A14',
   },
   header: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingBottom: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingTop: 10,
+    paddingBottom: 10,
+    zIndex: 20,
   },
   kicker: {
-    color: '#25D366',
+    color: '#22C55E',
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
@@ -650,54 +537,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
-  settingsButton: {
-    alignItems: 'center',
-    backgroundColor: '#102820',
-    borderColor: '#1D3B31',
-    borderRadius: 22,
-    borderWidth: 1,
-    height: 42,
-    justifyContent: 'center',
-    width: 42,
-  },
-  settingsIcon: {
-    color: '#D9FFF0',
-    fontSize: 20,
-    fontWeight: '900',
-  },
-  addContactButton: {
-    alignItems: 'center',
-    backgroundColor: '#25D366',
-    borderRadius: 22,
-    height: 42,
-    justifyContent: 'center',
-    width: 42,
-  },
-  addContactIcon: {
-    color: '#071A14',
-    fontSize: 27,
-    fontWeight: '900',
-    lineHeight: 29,
-  },
   logoutButton: {
     backgroundColor: '#BBF7D0',
     borderColor: '#86EFAC',
     borderRadius: 8,
     borderWidth: 1,
-    paddingHorizontal: 11,
+    paddingHorizontal: 12,
     paddingVertical: 9,
+  },
+  logoutButtonPressed: {
+    opacity: 0.68,
   },
   logoutText: {
     color: '#064E3B',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
   },
-  buttonPressed: {
-    opacity: 0.68,
-  },
   searchWrap: {
-    paddingBottom: 8,
     paddingHorizontal: 16,
+    paddingBottom: 8,
   },
   searchInput: {
     backgroundColor: '#102820',
@@ -709,20 +567,57 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: 14,
   },
+  addContactButton: {
+    alignItems: 'center',
+    backgroundColor: '#22C55E',
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  addContactButtonPressed: {
+    backgroundColor: '#16A34A',
+    opacity: 0.9,
+  },
+  addContactIcon: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '900',
+    lineHeight: 28,
+  },
+  settingsButton: {
+    alignItems: 'center',
+    backgroundColor: '#102820',
+    borderColor: '#1D3B31',
+    borderRadius: 22,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  settingsButtonPressed: {
+    opacity: 0.72,
+  },
+  settingsIcon: {
+    color: '#D9FFF0',
+    fontSize: 21,
+    fontWeight: '900',
+    lineHeight: 24,
+  },
   listContent: {
-    paddingBottom: 28,
     paddingHorizontal: 16,
     paddingTop: 4,
+    paddingBottom: 28,
   },
   conversationRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
   },
-  conversationItemContainer: {
+  conversationItemWrap: {
     flex: 1,
   },
-  moreButton: {
+  renameButton: {
     alignItems: 'center',
     backgroundColor: '#102820',
     borderColor: '#1D3B31',
@@ -730,19 +625,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 48,
     justifyContent: 'center',
-    width: 42,
+    width: 44,
   },
-  moreButtonPressed: {
-    backgroundColor: '#173D30',
+  renameButtonPressed: {
+    backgroundColor: '#19382E',
+    opacity: 0.82,
   },
-  moreButtonText: {
-    color: '#D9FFF0',
-    fontSize: 25,
-    fontWeight: '900',
-    lineHeight: 26,
-  },
-  disabledAction: {
-    opacity: 0.55,
+  renameButtonIcon: {
+    color: '#25D366',
+    fontSize: 23,
+    fontWeight: '800',
   },
   emptyState: {
     borderColor: '#1D3B31',
@@ -768,65 +660,12 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     padding: 16,
   },
-  actionSheet: {
-    backgroundColor: '#102820',
-    borderColor: '#1D3B31',
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 16,
-  },
-  actionSheetTitle: {
-    color: '#FFFFFF',
-    fontSize: 19,
-    fontWeight: '900',
-  },
-  actionSheetSubtitle: {
-    color: '#A6BBB1',
-    fontSize: 13,
-    marginBottom: 18,
-    marginTop: 4,
-  },
-  actionButton: {
-    borderColor: '#1D3B31',
-    borderRadius: 10,
-    borderWidth: 1,
-    marginTop: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 15,
-  },
-  actionButtonPressed: {
-    opacity: 0.7,
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  deleteActionButton: {
-    backgroundColor: '#311C1D',
-    borderColor: '#6B2B31',
-  },
-  deleteActionText: {
-    color: '#FCA5A5',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  cancelButton: {
-    alignItems: 'center',
-    marginTop: 14,
-    paddingVertical: 12,
-  },
-  cancelButtonText: {
-    color: '#A6BBB1',
-    fontSize: 15,
-    fontWeight: '800',
-  },
   renameCard: {
     backgroundColor: '#102820',
     borderColor: '#1D3B31',
     borderRadius: 16,
     borderWidth: 1,
-    marginBottom: 40,
+    marginBottom: 24,
     padding: 18,
   },
   renameTitle: {
@@ -834,10 +673,17 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '900',
   },
-  renameEmail: {
+  renameSubtitle: {
     color: '#A6BBB1',
     fontSize: 13,
-    marginTop: 5,
+    lineHeight: 19,
+    marginTop: 6,
+  },
+  renameEmail: {
+    color: '#25D366',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 12,
   },
   renameInput: {
     backgroundColor: '#071A14',
@@ -846,7 +692,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     color: '#FFFFFF',
     fontSize: 16,
-    marginTop: 18,
+    marginTop: 16,
     minHeight: 52,
     paddingHorizontal: 14,
   },
@@ -879,9 +725,15 @@ const styles = StyleSheet.create({
     minWidth: 90,
     paddingHorizontal: 22,
   },
+  renameSaveButtonDisabled: {
+    opacity: 0.6,
+  },
   renameSaveText: {
     color: '#071A14',
     fontSize: 15,
     fontWeight: '900',
+  },
+  modalButtonPressed: {
+    opacity: 0.7,
   },
 });
