@@ -1119,7 +1119,7 @@ export default function ChatScreen({ navigation, route }: Props) {
             setRagQuestion(text);
             setRagError('');
           }}
-          placeholder={`What did ${title} say about Arsenal?`}
+          placeholder={`What do you want to ask?`}
           placeholderTextColor="#8b949e"
           returnKeyType="done"
           style={styles.ragQuestionInput}

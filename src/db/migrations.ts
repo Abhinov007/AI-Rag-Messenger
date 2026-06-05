@@ -114,6 +114,15 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
   // Shared conversation key for both participants
   await ensureColumn(db, 'conversations', 'participant_key', 'TEXT');
 
+  // User-specific chat hiding fields
+  await ensureColumn(
+    db,
+    'conversations',
+    'hidden_for_user',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+  await ensureColumn(db, 'conversations', 'hidden_at', 'TEXT');
+
   // Message sync fields
   await ensureColumn(db, 'messages', 'summary', 'TEXT');
   await ensureColumn(db, 'messages', 'remote_id', 'TEXT');
@@ -220,6 +229,14 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_conversations_owner_updated_at_unix
     ON conversations (owner_clerk_user_id, updated_at_unix DESC, id DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_conversations_owner_visible_updated_at_unix
+    ON conversations (
+      owner_clerk_user_id,
+      hidden_for_user,
+      updated_at_unix DESC,
+      id DESC
+    );
+
     CREATE INDEX IF NOT EXISTS idx_conversations_contact_user_updated_at_unix
     ON conversations (contact_clerk_user_id, updated_at_unix DESC, id DESC);
 
@@ -315,6 +332,9 @@ export async function runMigrations(db: SQLiteDatabase) {
       contact_normalized_email TEXT,
       contact_clerk_user_id TEXT,
       participant_key TEXT,
+
+      hidden_for_user INTEGER NOT NULL DEFAULT 0,
+      hidden_at TEXT,
 
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

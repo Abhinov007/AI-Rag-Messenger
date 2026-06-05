@@ -13,15 +13,23 @@ type Props = {
   conversation: ConversationListItem;
   unreadCount?: number;
   onPress?: () => void;
+  onLongPress?: () => void;
 };
 
 export default function ConversationItem({
   conversation,
   unreadCount = 0,
   onPress,
+  onLongPress,
 }: Props) {
-  const title = conversation.title ?? 'Untitled conversation';
+  const title =
+    conversation.title ??
+    conversation.contactName ??
+    conversation.contactEmail ??
+    'Untitled conversation';
+
   const lastMessage = conversation.lastMessage ?? 'No messages yet';
+
   const time = formatLastMessageTime(
     conversation.lastMessageAt ?? conversation.updatedAt,
   );
@@ -33,6 +41,8 @@ export default function ConversationItem({
       activeOpacity={0.76}
       hitSlop={4}
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={450}
       style={styles.container}
     >
       <View style={styles.avatar}>
@@ -51,6 +61,7 @@ export default function ConversationItem({
           <Text numberOfLines={1} style={styles.lastMessage}>
             {lastMessage}
           </Text>
+
           {unreadCount > 0 ? (
             <View style={styles.unreadBadge}>
               <Text style={styles.unreadText}>{unreadCount}</Text>

@@ -113,9 +113,11 @@ INSERT INTO conversations
   created_at,
   updated_at,
   synced,
-  sync_error
+  sync_error,
+  hidden_for_user,
+  hidden_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 0, NULL);
     `,
     [
       conversation.title?.trim() || null,
@@ -202,6 +204,7 @@ export async function getConversations(
       OR conversations.contact_clerk_user_id = ?
     )
     AND conversations.contact_normalized_email IS NOT NULL
+    AND COALESCE(conversations.hidden_for_user, 0) = 0
     ORDER BY conversations.updated_at_unix DESC, conversations.id DESC;
     `,
     [currentClerkUserId, currentClerkUserId],
@@ -417,6 +420,8 @@ export async function updateConversationLastMessage(
     UPDATE conversations
     SET last_message = ?,
         updated_at = ?,
+        hidden_for_user = 0,
+        hidden_at = NULL,
         synced = 0
     WHERE id = ?;
     `,
@@ -443,7 +448,47 @@ export async function renameConversation(
   );
 }
 
-export async function deleteConversation(conversationId: number) {
+/**
+ * User-specific delete.
+ *
+ * This does not remove the conversation row or messages.
+ * It only hides the chat from the current user's chat list.
+ */
+export async function deleteConversationForCurrentUser(
+  conversationId: number,
+): Promise<void> {
+  const db = await getDatabase();
+  const now = getUtcNowIsoTimestamp();
+
+  await db.runAsync(
+    `
+    UPDATE conversations
+    SET hidden_for_user = 1,
+        hidden_at = ?,
+        updated_at = ?
+    WHERE id = ?;
+    `,
+    [now, now, conversationId],
+  );
+}
+
+/**
+ * Backward-compatible delete function.
+ *
+ * Keep this name because your UI may already import deleteConversation().
+ * Internally, it now performs user-specific soft delete instead of hard delete.
+ */
+export async function deleteConversation(conversationId: number): Promise<void> {
+  await deleteConversationForCurrentUser(conversationId);
+}
+
+/**
+ * Use this only for debugging/admin cleanup.
+ * Do not call this from normal chat delete UI.
+ */
+export async function permanentlyDeleteConversation(
+  conversationId: number,
+): Promise<void> {
   const db = await getDatabase();
 
   await db.runAsync('DELETE FROM conversations WHERE id = ?;', [conversationId]);
@@ -459,7 +504,9 @@ export async function debugConversationOwners() {
       owner_clerk_user_id,
       contact_clerk_user_id,
       contact_email,
-      contact_normalized_email
+      contact_normalized_email,
+      hidden_for_user,
+      hidden_at
     FROM conversations
     ORDER BY id DESC;
   `);
@@ -603,10 +650,12 @@ export async function upsertPulledConversation({
       contact_clerk_user_id,
       synced,
       sync_error,
+      hidden_for_user,
+      hidden_at,
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?);
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, 0, NULL, ?, ?);
     `,
     [
       title,

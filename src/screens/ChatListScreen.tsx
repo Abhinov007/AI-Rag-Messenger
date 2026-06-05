@@ -34,7 +34,10 @@ import {
   normalizeEmail,
   renameContactLocally,
 } from '../db/contactsRepository';
-import { listConversations } from '../db/conversationRepository';
+import {
+  deleteConversationForCurrentUser,
+  listConversations,
+} from '../db/conversationRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteConversations } from '../services/conversationPull';
 import type { ConversationListItem } from '../types/conversation';
@@ -141,6 +144,50 @@ export default function ChatListScreen({ onLogout }: Props) {
     Keyboard.dismiss();
     navigation.navigate('Settings');
   }, [navigation]);
+
+  const handleDeleteChat = useCallback((conversation: ConversationListItem) => {
+    Keyboard.dismiss();
+
+    const displayName =
+      conversation.title ??
+      conversation.contactName ??
+      conversation.contactEmail ??
+      'this chat';
+
+    Alert.alert(
+      'Delete chat?',
+      `Do you want to delete your chat with ${displayName}? This will only remove it from your chat list. It will not delete the contact or affect the other person.`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteConversationForCurrentUser(conversation.id);
+
+              setConversations(currentConversations =>
+                currentConversations.filter(
+                  currentConversation =>
+                    currentConversation.id !== conversation.id,
+                ),
+              );
+            } catch (deleteError) {
+              console.error('Failed to delete chat:', deleteError);
+
+              Alert.alert(
+                'Delete failed',
+                'Unable to delete this chat. Please try again.',
+              );
+            }
+          },
+        },
+      ],
+    );
+  }, []);
 
   const handleOpenRenameModal = useCallback(
     (conversation: ConversationListItem) => {
@@ -388,6 +435,7 @@ export default function ChatListScreen({ onLogout }: Props) {
               <ConversationItem
                 conversation={item}
                 onPress={() => handleOpenConversation(item)}
+                onLongPress={() => handleDeleteChat(item)}
               />
             </View>
 
