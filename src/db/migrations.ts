@@ -138,6 +138,24 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
   // Message ownership field: needed for left/right chat alignment
   await ensureColumn(db, 'messages', 'sender_clerk_user_id', 'TEXT');
 
+  // User-specific message deletion fields
+  // Used when the current user deletes one message from their own chat view.
+  await ensureColumn(
+    db,
+    'messages',
+    'deleted_for_user',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+  await ensureColumn(db, 'messages', 'deleted_at', 'TEXT');
+
+  await ensureColumn(
+    db,
+    'messages_archive',
+    'deleted_for_user',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+  await ensureColumn(db, 'messages_archive', 'deleted_at', 'TEXT');
+
   // Contact sync fields
   await ensureColumn(db, 'contacts', 'clerk_user_id', 'TEXT');
   await ensureColumn(db, 'contacts', 'remote_id', 'TEXT');
@@ -253,6 +271,14 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at_unix_desc
     ON messages (conversation_id, created_at_unix DESC, id DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_visible_created_at_unix
+    ON messages (
+      conversation_id,
+      deleted_for_user,
+      created_at_unix ASC,
+      id ASC
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_synced_created_at_unix
     ON messages (synced, created_at_unix ASC, id ASC);
 
@@ -265,6 +291,14 @@ async function createPostMigrationIndexes(db: SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_archive_conversation_created_at_unix_desc
     ON messages_archive (conversation_id, created_at_unix DESC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_archive_conversation_visible_created_at_unix
+    ON messages_archive (
+      conversation_id,
+      deleted_for_user,
+      created_at_unix ASC,
+      id ASC
+    );
 
     CREATE TRIGGER IF NOT EXISTS trg_conversations_insert_sort_keys
     AFTER INSERT ON conversations
@@ -352,6 +386,10 @@ export async function runMigrations(db: SQLiteDatabase) {
       remote_id TEXT,
       sync_error TEXT,
       synced INTEGER NOT NULL DEFAULT 0,
+
+      deleted_for_user INTEGER NOT NULL DEFAULT 0,
+      deleted_at TEXT,
+
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       created_at_unix INTEGER,
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
@@ -367,6 +405,10 @@ export async function runMigrations(db: SQLiteDatabase) {
       remote_id TEXT,
       sync_error TEXT,
       synced INTEGER NOT NULL DEFAULT 1,
+
+      deleted_for_user INTEGER NOT NULL DEFAULT 0,
+      deleted_at TEXT,
+
       created_at TEXT NOT NULL,
       created_at_unix INTEGER,
       FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE

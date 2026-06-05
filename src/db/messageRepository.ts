@@ -25,7 +25,10 @@ type MessageRow = {
   remote_id: string | null;
   sync_error: string | null;
   synced: number;
+  deleted_for_user?: number;
+  deleted_at?: string | null;
   created_at: string;
+  created_at_unix?: number | null;
 };
 
 export type MessagePage = {
@@ -51,6 +54,13 @@ function mapMessage(row: MessageRow): Message {
   };
 }
 
+/**
+ * Adds owner/access protection to queries that read from the live messages table.
+ *
+ * Important:
+ * This helper assumes the base query uses the `messages` table, not
+ * `messages_archive`.
+ */
 function applyMessageAccessScope(
   baseQuery: string,
   currentClerkUserId?: string,
@@ -79,6 +89,12 @@ function applyMessageAccessScope(
   };
 }
 
+/**
+ * Builds a merged message history query from active messages and archived messages.
+ *
+ * Deleted messages are filtered out here, so ChatScreen will not show messages
+ * that were deleted for the current user.
+ */
 function buildMessageHistoryQuery(currentClerkUserId?: string) {
   const liveAccessClause = currentClerkUserId
     ? `
@@ -124,10 +140,13 @@ function buildMessageHistoryQuery(currentClerkUserId?: string) {
         remote_id,
         sync_error,
         synced,
+        deleted_for_user,
+        deleted_at,
         created_at,
         created_at_unix
       FROM messages
       WHERE conversation_id = ?
+        AND COALESCE(deleted_for_user, 0) = 0
       ${liveAccessClause}
 
       UNION ALL
@@ -142,10 +161,13 @@ function buildMessageHistoryQuery(currentClerkUserId?: string) {
         remote_id,
         sync_error,
         synced,
+        deleted_for_user,
+        deleted_at,
         created_at,
         created_at_unix
       FROM messages_archive
       WHERE conversation_id = ?
+        AND COALESCE(deleted_for_user, 0) = 0
       ${archiveAccessClause}
     `,
     params: [
@@ -201,7 +223,8 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
   const summary = message.summary ?? null;
   const synced = message.synced ? 1 : 0;
   const senderClerkUserId = message.senderClerkUserId ?? null;
-  const createdAt = normalizeUtcTimestamp(message.createdAt) ?? getUtcNowIsoTimestamp();
+  const createdAt =
+    normalizeUtcTimestamp(message.createdAt) ?? getUtcNowIsoTimestamp();
 
   if (message.id != null && message.id > 0) {
     await db.runAsync(
@@ -262,7 +285,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
 }
 
 /**
- * Returns all messages for a conversation in chronological order.
+ * Returns all visible messages for a conversation in chronological order.
  */
 export async function getMessagesByConversationId(
   conversationId: number,
@@ -284,7 +307,10 @@ export async function getMessagesByConversationId(
       remote_id,
       sync_error,
       synced,
-      created_at
+      deleted_for_user,
+      deleted_at,
+      created_at,
+      created_at_unix
     FROM (
       ${history.query}
     )
@@ -329,6 +355,7 @@ export async function getMessagePageByConversationId({
       : '';
 
   const fetchLimit = limit + 1;
+
   const params: Array<string | number> = [
     conversationId,
     ...history.params.slice(0, accessParamCount),
@@ -354,7 +381,10 @@ export async function getMessagePageByConversationId({
       remote_id,
       sync_error,
       synced,
-      created_at
+      deleted_for_user,
+      deleted_at,
+      created_at,
+      created_at_unix
     FROM (
       ${history.query}
     )
@@ -375,11 +405,17 @@ export async function getMessagePageByConversationId({
   };
 }
 
+/**
+ * Returns one visible live message by id.
+ *
+ * Deleted messages are not returned here.
+ */
 export async function getMessageById(
   messageId: number,
   currentClerkUserId?: string,
 ): Promise<Message | null> {
   const db = await getDatabase();
+
   const scoped = applyMessageAccessScope(
     `
     SELECT
@@ -392,9 +428,13 @@ export async function getMessageById(
       remote_id,
       sync_error,
       synced,
-      created_at
+      deleted_for_user,
+      deleted_at,
+      created_at,
+      created_at_unix
     FROM messages
     WHERE id = ?
+      AND COALESCE(deleted_for_user, 0) = 0
     `,
     currentClerkUserId,
   );
@@ -410,10 +450,18 @@ export async function getMessageById(
   return row ? mapMessage(row) : null;
 }
 
+/**
+ * Returns unsynced live messages.
+ *
+ * Do not filter deleted_for_user here.
+ * When a user deletes a message, we mark synced = 0 so a future Supabase
+ * deletion-sync layer can find it.
+ */
 export async function getUnsyncedMessages(
   currentClerkUserId?: string,
 ): Promise<Message[]> {
   const db = await getDatabase();
+
   const scoped = applyMessageAccessScope(
     `
     SELECT
@@ -426,7 +474,10 @@ export async function getUnsyncedMessages(
       remote_id,
       sync_error,
       synced,
-      created_at
+      deleted_for_user,
+      deleted_at,
+      created_at,
+      created_at_unix
     FROM messages
     WHERE synced = 0
     `,
@@ -588,18 +639,39 @@ export async function markMessageSyncFailed(
 }
 
 /**
- * Deletes one message by id.
+ * Soft-deletes one message for the current user's local view.
+ *
+ * This does not delete the whole chat.
+ * This does not delete the contact.
+ * This does not delete the message for the other participant.
  */
-export async function deleteMessage(messageId: number) {
+export async function deleteMessageForCurrentUser(
+  messageId: number,
+): Promise<void> {
   const db = await getDatabase();
+  const now = getUtcNowIsoTimestamp();
 
   await db.runAsync(
     `
-    DELETE FROM messages
+    UPDATE messages
+    SET deleted_for_user = 1,
+        deleted_at = ?,
+        synced = 0,
+        sync_error = NULL
     WHERE id = ?;
     `,
-    [messageId],
+    [now, messageId],
   );
+}
+
+/**
+ * Backward-compatible delete function.
+ *
+ * Old callers may still call deleteMessage(messageId). Keep it, but make it
+ * behave as "delete for me" instead of hard-deleting the row.
+ */
+export async function deleteMessage(messageId: number) {
+  await deleteMessageForCurrentUser(messageId);
 }
 
 export async function upsertRemoteMessageLocally({
@@ -622,9 +694,12 @@ export async function upsertRemoteMessageLocally({
   const db = await getDatabase();
   const normalizedCreatedAt = normalizeUtcTimestamp(createdAt) ?? createdAt;
 
-  const existing = await db.getFirstAsync<{ id: number }>(
+  const existing = await db.getFirstAsync<{
+    id: number;
+    deleted_for_user?: number;
+  }>(
     `
-    SELECT id
+    SELECT id, deleted_for_user
     FROM messages
     WHERE remote_id = ?
     LIMIT 1;

@@ -7,7 +7,7 @@
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '@clerk/expo';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -27,6 +27,7 @@ import {
   ScrollView,
   Keyboard,
 } from 'react-native';
+
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -50,6 +51,7 @@ import {
 import { getConversationById } from '../db/conversationRepository';
 import {
   addMessage,
+  deleteMessageForCurrentUser,
   getMessagePageByConversationId,
 } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
@@ -59,7 +61,6 @@ import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 import { searchConversationMessages } from '../services/ragSearch';
-
 
 
 
@@ -341,6 +342,44 @@ export default function ChatScreen({ navigation, route }: Props) {
       setRetryingMessageId(null);
     }
   }
+
+  const handleDeleteMessage = useCallback(
+    (message: Message) => {
+      Alert.alert(
+        'Delete message?',
+        'This message will be removed from this chat on your device.',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await deleteMessageForCurrentUser(message.id);
+  
+                setMessages(currentMessages =>
+                  currentMessages.filter(
+                    currentMessage => currentMessage.id !== message.id,
+                  ),
+                );
+              } catch (error) {
+                console.error('Failed to delete message:', error);
+  
+                Alert.alert(
+                  'Delete failed',
+                  'Unable to delete this message. Please try again.',
+                );
+              }
+            },
+          },
+        ],
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -829,49 +868,56 @@ export default function ChatScreen({ navigation, route }: Props) {
                 : null;
 
               return (
-                <View
-                  style={[
-                    styles.bubbleWrap,
-                    isOwnMessage
-                      ? styles.bubbleWrapUser
-                      : styles.bubbleWrapOther,
-                  ]}
+                <Pressable
+                  onLongPress={() => handleDeleteMessage(item)}
+                  delayLongPress={500}
                 >
                   <View
                     style={[
-                      styles.bubble,
-                      isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
+                      styles.bubbleWrap,
+                      isOwnMessage
+                        ? styles.bubbleWrapUser
+                        : styles.bubbleWrapOther,
                     ]}
                   >
-                    <Text style={styles.bubbleMeta}>
-                      {isOwnMessage
-                        ? 'You'
-                        : item.senderType === 'assistant'
-                          ? 'Assistant'
-                          : title}
-                    </Text>
-
-                    <Text style={styles.bubbleBody}>{item.body}</Text>
-
-                    <View style={styles.messageFooter}>
-                      <Text style={styles.messageTime}>
-                        {formatMessageTime(item.createdAt)}
+                    <View
+                      style={[
+                        styles.bubble,
+                        isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
+                      ]}
+                    >
+                      <Text style={styles.bubbleMeta}>
+                        {isOwnMessage
+                          ? 'You'
+                          : item.senderType === 'assistant'
+                            ? 'Assistant'
+                            : title}
                       </Text>
 
-                      {statusText ? (
-                        item.syncError ? (
-                          <Pressable onPress={() => handleRetryMessage(item)}>
-                            <Text style={styles.failedStatus}>
+                      <Text style={styles.bubbleBody}>{item.body}</Text>
+
+                      <View style={styles.messageFooter}>
+                        <Text style={styles.messageTime}>
+                          {formatMessageTime(item.createdAt)}
+                        </Text>
+
+                        {statusText ? (
+                          item.syncError ? (
+                            <Pressable onPress={() => handleRetryMessage(item)}>
+                              <Text style={styles.failedStatus}>
+                                {statusText}
+                              </Text>
+                            </Pressable>
+                          ) : (
+                            <Text style={styles.messageStatus}>
                               {statusText}
                             </Text>
-                          </Pressable>
-                        ) : (
-                          <Text style={styles.messageStatus}>{statusText}</Text>
-                        )
-                      ) : null}
+                          )
+                        ) : null}
+                      </View>
                     </View>
                   </View>
-                </View>
+                </Pressable>
               );
             }}
             ListHeaderComponent={
