@@ -29,6 +29,7 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
     ex.autolinkLibrariesFromCommand(expoAutolinking.rnConfigCommand)
   }
 }
+
 expoAutolinking.useExpoModules()
 
 rootProject.name = 'AIRagMessenger'
@@ -36,4 +37,5 @@ rootProject.name = 'AIRagMessenger'
 expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
+
 includeBuild(expoAutolinking.reactNativeGradlePlugin)
