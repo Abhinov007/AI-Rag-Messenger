@@ -799,3 +799,16 @@ export async function upsertRemoteMessageLocally({
 
   return Number(result.lastInsertRowId);
 }
+
+export async function clearMessageSyncError(messageId: number): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    UPDATE messages
+    SET sync_error = NULL
+    WHERE id = ?;
+    `,
+    [messageId],
+  );
+}

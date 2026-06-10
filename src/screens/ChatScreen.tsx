@@ -7,7 +7,7 @@
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '@clerk/expo';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -51,7 +51,6 @@ import {
 import { getConversationById } from '../db/conversationRepository';
 import {
   addMessage,
-  deleteMessageForCurrentUser,
   getMessagePageByConversationId,
 } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
@@ -61,6 +60,9 @@ import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 import { searchConversationMessages } from '../services/ragSearch';
+import { deleteMessageForCurrentUser } from '../db/messageRepository';
+import { sendOfflineChatMessage } from '../services/offlineMeshService';
+import { clearMessageSyncError } from '../db/messageRepository';
 
 
 
@@ -98,6 +100,7 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [summaryText, setSummaryText] = useState('');
   const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
   const [error, setError] = useState('');
+
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const subscriptionKeyRef = useRef<string | null>(null);
@@ -195,25 +198,25 @@ export default function ChatScreen({ navigation, route }: Props) {
       conversationId,
       userId ?? undefined,
     );
-
+  
     if (!conversation) {
       setError('Conversation not found.');
       setMessages([]);
       return null;
     }
-
+  
     setTitle(conversation.title ?? 'Chat');
     setError('');
-
+  
     const page = await getMessagePageByConversationId({
       conversationId,
       currentClerkUserId: userId ?? undefined,
       limit: MESSAGE_PAGE_SIZE,
     });
-
+  
     setMessages(page.messages);
     setHasOlderMessages(page.hasMore);
-
+  
     return conversation;
   }
 
@@ -602,37 +605,129 @@ export default function ChatScreen({ navigation, route }: Props) {
 
   async function handleSend() {
     const text = draft.trim();
-
+  
     if (!text || isSending || isCondensingMessage) {
       return;
     }
-
+  
     setIsSending(true);
-
+  
     try {
       const messageId = await addMessage(conversationId, 'user', text, userId);
-
+  
       /*
        * Only clear the composer after SQLite successfully stores the message.
        * This prevents losing the user's draft if local saving fails.
        */
       setDraft('');
       resetCondenseComposerState();
-
+  
       await loadThread();
       scrollToBottom(true);
+  
+      /*
+       * Get the latest conversation directly here.
+       * This avoids useState/scope issues with offlineRecipientClerkUserId.
+       */
+      const conversation = await getConversationById(
+        conversationId,
+        userId ?? undefined,
+      );
+      
+      const recipientClerkUserId = conversation?.contactClerkUserId ?? null;
+      const participantKey = conversation?.participantKey ?? null;
+      
+      console.log('Offline send check:', {
+        userId,
+        conversationId,
+        messageId,
+        recipientClerkUserId,
+        participantKey,
+        bodyLength: text.length,
+      });
+      
+      if (userId && recipientClerkUserId) {
+        void sendOfflineChatMessage({
+          recipientClerkUserId,
+          senderClerkUserId: userId,
+          localMessageId: messageId,
+          conversationId,
+          participantKey,
+          body: text,
+        }).catch((offlineError: unknown) => {
+          console.warn('Offline mesh send failed:', offlineError);
+        });
+      } else {
+        console.warn('Offline mesh send skipped:', {
+          hasUserId: Boolean(userId),
+          hasRecipientClerkUserId: Boolean(recipientClerkUserId),
+          recipientClerkUserId,
+          conversation,
+        });
+      }
+  
+      const offlineConversation = conversation as {
+        contactClerkUserId?: string | null;
+        participantKey?: string | null;
+      } | null;
+  
 
+  
+      console.log('Offline send check:', {
+        userId,
+        conversationId,
+        messageId,
+        recipientClerkUserId,
+        participantKey,
+        bodyLength: text.length,
+      });
+  
+      /*
+       * Offline Protocol send.
+       * This does not need internet. It only needs BLE mesh to be running.
+       */
+      if (userId && recipientClerkUserId) {
+        void sendOfflineChatMessage({
+          recipientClerkUserId,
+          senderClerkUserId: userId,
+          localMessageId: messageId,
+          conversationId,
+          participantKey,
+          body: text,
+        }).catch((offlineError: unknown) => {
+          console.warn('Offline mesh send failed:', offlineError);
+        });
+      } else {
+        console.warn('Offline mesh send skipped:', {
+          hasUserId: Boolean(userId),
+          hasRecipientClerkUserId: Boolean(recipientClerkUserId),
+          recipientClerkUserId,
+        });
+      }
+  
+      /*
+       * Supabase sync remains separate.
+       * If internet is off, this may fail, but local save + offline mesh send
+       * already happened above.
+       */
       if (userId) {
         try {
           await syncMessageById(messageId, userId, getClerkToken);
         } catch (syncError) {
           console.warn(
-            'Message saved locally but sync failed. Will retry later:',
+            'Message saved locally. Supabase sync failed, keeping it queued:',
             syncError,
           );
+      
+          /**
+           * Important:
+           * Supabase/Clerk network failure should NOT make the chat bubble red.
+           * The message is already saved locally and offline mesh may still deliver it.
+           */
+          await clearMessageSyncError(messageId);
         }
       }
-
+  
       await loadThread();
       scrollToBottom(true);
     } catch (sendError) {
@@ -868,56 +963,49 @@ export default function ChatScreen({ navigation, route }: Props) {
                 : null;
 
               return (
-                <Pressable
-                  onLongPress={() => handleDeleteMessage(item)}
-                  delayLongPress={500}
+                <View
+                  style={[
+                    styles.bubbleWrap,
+                    isOwnMessage
+                      ? styles.bubbleWrapUser
+                      : styles.bubbleWrapOther,
+                  ]}
                 >
                   <View
                     style={[
-                      styles.bubbleWrap,
-                      isOwnMessage
-                        ? styles.bubbleWrapUser
-                        : styles.bubbleWrapOther,
+                      styles.bubble,
+                      isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
                     ]}
                   >
-                    <View
-                      style={[
-                        styles.bubble,
-                        isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
-                      ]}
-                    >
-                      <Text style={styles.bubbleMeta}>
-                        {isOwnMessage
-                          ? 'You'
-                          : item.senderType === 'assistant'
-                            ? 'Assistant'
-                            : title}
+                    <Text style={styles.bubbleMeta}>
+                      {isOwnMessage
+                        ? 'You'
+                        : item.senderType === 'assistant'
+                          ? 'Assistant'
+                          : title}
+                    </Text>
+
+                    <Text style={styles.bubbleBody}>{item.body}</Text>
+
+                    <View style={styles.messageFooter}>
+                      <Text style={styles.messageTime}>
+                        {formatMessageTime(item.createdAt)}
                       </Text>
 
-                      <Text style={styles.bubbleBody}>{item.body}</Text>
-
-                      <View style={styles.messageFooter}>
-                        <Text style={styles.messageTime}>
-                          {formatMessageTime(item.createdAt)}
-                        </Text>
-
-                        {statusText ? (
-                          item.syncError ? (
-                            <Pressable onPress={() => handleRetryMessage(item)}>
-                              <Text style={styles.failedStatus}>
-                                {statusText}
-                              </Text>
-                            </Pressable>
-                          ) : (
-                            <Text style={styles.messageStatus}>
+                      {statusText ? (
+                        item.syncError ? (
+                          <Pressable onPress={() => handleRetryMessage(item)}>
+                            <Text style={styles.failedStatus}>
                               {statusText}
                             </Text>
-                          )
-                        ) : null}
-                      </View>
+                          </Pressable>
+                        ) : (
+                          <Text style={styles.messageStatus}>{statusText}</Text>
+                        )
+                      ) : null}
                     </View>
                   </View>
-                </Pressable>
+                </View>
               );
             }}
             ListHeaderComponent={

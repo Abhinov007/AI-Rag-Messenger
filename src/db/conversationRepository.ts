@@ -31,6 +31,7 @@ type ConversationRow = {
   contact_email: string | null;
   contact_normalized_email: string | null;
   contact_clerk_user_id: string | null;
+  participant_key: string | null;
 };
 
 type ConversationListRow = ConversationRow & {
@@ -56,6 +57,7 @@ function mapConversation(row: ConversationRow): Conversation {
     contactEmail: row.contact_email,
     contactNormalizedEmail: row.contact_normalized_email,
     contactClerkUserId: row.contact_clerk_user_id,
+    participantKey: row.participant_key,
   };
 }
 
@@ -155,6 +157,7 @@ export async function getConversations(
       conversations.contact_email,
       conversations.contact_normalized_email,
       conversations.contact_clerk_user_id,
+      conversations.participant_key,
       COALESCE(
         conversations.last_message,
         (
@@ -227,20 +230,21 @@ export async function getConversationById(
   const scoped = applyConversationAccessScope(
     `
     SELECT
-      id,
-      title,
-      created_at,
-      updated_at,
-      remote_id,
-      synced,
-      sync_error,
-      owner_clerk_user_id,
-      contact_name,
-      contact_email,
-      contact_normalized_email,
-      contact_clerk_user_id
-    FROM conversations
-    WHERE id = ?
+  id,
+  title,
+  created_at,
+  updated_at,
+  remote_id,
+  synced,
+  sync_error,
+  owner_clerk_user_id,
+  contact_name,
+  contact_email,
+  contact_normalized_email,
+  contact_clerk_user_id,
+  participant_key
+FROM conversations
+WHERE id = ?
     `,
     currentClerkUserId,
   );

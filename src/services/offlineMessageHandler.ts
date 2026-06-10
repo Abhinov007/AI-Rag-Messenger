@@ -1,14 +1,7 @@
-import { saveMessage } from '../db/messageRepository';
+import { getDatabase } from '../db/database';
 import { getUtcNowIsoTimestamp } from '../utils/timestamps';
 
-/**
- * This function receives messages from Offline Protocol SDK
- * and stores them locally.
- *
- * You may need to replace getOrCreateConversationFromOfflinePayload()
- * with your actual conversation repository function.
- */
-export async function handleIncomingOfflineMessage(payload: {
+type IncomingOfflineChatPayload = {
   clientMessageId: string;
   senderClerkUserId: string;
   recipientClerkUserId: string;
@@ -16,49 +9,150 @@ export async function handleIncomingOfflineMessage(payload: {
   participantKey?: string | null;
   body: string;
   createdAt: string;
-}) {
-  /**
-   * TEMP VERSION:
-   * If the sender included a local conversationId, that ID may not exist
-   * on the receiver's phone.
-   *
-   * Correct final version:
-   * Use participantKey or senderClerkUserId to find/create local conversation.
-   */
-  const localConversationId = await getOrCreateConversationForOfflineSender({
-    senderClerkUserId: payload.senderClerkUserId,
-    recipientClerkUserId: payload.recipientClerkUserId,
-    participantKey: payload.participantKey ?? null,
-  });
+};
 
-  await saveMessage({
-    conversationId: localConversationId,
-    senderType: 'user',
-    senderClerkUserId: payload.senderClerkUserId,
-    body: payload.body,
-    createdAt: payload.createdAt ?? getUtcNowIsoTimestamp(),
-    synced: false,
-  });
+function buildParticipantKey(userA: string, userB: string): string {
+  return [userA, userB].sort().join(':');
 }
 
-/**
- * Replace this with your actual conversationRepository function.
- *
- * You need a function that:
- * 1. Checks if a conversation already exists for this participant pair.
- * 2. If not, creates one.
- * 3. Returns the local conversation id.
- */
-async function getOrCreateConversationForOfflineSender({
-  senderClerkUserId,
-  recipientClerkUserId,
-  participantKey,
-}: {
-  senderClerkUserId: string;
-  recipientClerkUserId: string;
-  participantKey: string | null;
-}): Promise<number> {
-  throw new Error(
-    `TODO: implement conversation lookup/create for offline sender ${senderClerkUserId} -> ${recipientClerkUserId}, participantKey=${participantKey}`,
-  );
+export async function handleIncomingOfflineMessage(
+  payload: IncomingOfflineChatPayload,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const now = getUtcNowIsoTimestamp();
+
+  const createdAt = payload.createdAt || now;
+
+  const participantKey =
+    payload.participantKey ??
+    buildParticipantKey(payload.senderClerkUserId, payload.recipientClerkUserId);
+
+  const offlineRemoteId = `offline:${payload.senderClerkUserId}:${payload.clientMessageId}`;
+
+  console.log('Saving incoming offline message:', {
+    senderClerkUserId: payload.senderClerkUserId,
+    recipientClerkUserId: payload.recipientClerkUserId,
+    participantKey,
+    offlineRemoteId,
+    body: payload.body,
+  });
+
+  await db.withTransactionAsync(async () => {
+    const existingMessage = await db.getFirstAsync<{ id: number }>(
+      `
+      SELECT id
+      FROM messages
+      WHERE remote_id = ?
+      LIMIT 1;
+      `,
+      [offlineRemoteId],
+    );
+
+    if (existingMessage?.id) {
+      console.log('Offline message already exists, skipping duplicate:', {
+        offlineRemoteId,
+      });
+      return;
+    }
+
+    let conversation = await db.getFirstAsync<{ id: number }>(
+      `
+      SELECT id
+      FROM conversations
+      WHERE participant_key = ?
+         OR (
+          owner_clerk_user_id = ?
+          AND contact_clerk_user_id = ?
+         )
+      LIMIT 1;
+      `,
+      [
+        participantKey,
+        payload.recipientClerkUserId,
+        payload.senderClerkUserId,
+      ],
+    );
+
+    let localConversationId = conversation?.id ?? null;
+
+    if (!localConversationId) {
+      const result = await db.runAsync(
+        `
+        INSERT INTO conversations (
+          title,
+          last_message,
+          owner_clerk_user_id,
+          contact_name,
+          contact_email,
+          contact_normalized_email,
+          contact_clerk_user_id,
+          participant_key,
+          synced,
+          sync_error,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 0, NULL, ?, ?);
+        `,
+        [
+          'Offline Contact',
+          payload.body,
+          payload.recipientClerkUserId,
+          'Offline Contact',
+          payload.senderClerkUserId,
+          participantKey,
+          now,
+          now,
+        ],
+      );
+
+      localConversationId = Number(result.lastInsertRowId);
+
+      console.log('Created local conversation for offline message:', {
+        localConversationId,
+        participantKey,
+      });
+    }
+
+    await db.runAsync(
+      `
+      INSERT INTO messages (
+        conversation_id,
+        sender_type,
+        sender_clerk_user_id,
+        body,
+        summary,
+        remote_id,
+        sync_error,
+        synced,
+        created_at
+      )
+      VALUES (?, 'user', ?, ?, NULL, ?, NULL, 0, ?);
+      `,
+      [
+        localConversationId,
+        payload.senderClerkUserId,
+        payload.body,
+        offlineRemoteId,
+        createdAt,
+      ],
+    );
+
+    await db.runAsync(
+      `
+      UPDATE conversations
+      SET last_message = ?,
+          updated_at = ?
+      WHERE id = ?;
+      `,
+      [payload.body, createdAt, localConversationId],
+    );
+
+    console.log('Saved incoming offline message:', {
+      localConversationId,
+      offlineRemoteId,
+      body: payload.body,
+    });
+  });
 }
