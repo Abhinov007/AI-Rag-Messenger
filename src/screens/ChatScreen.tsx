@@ -61,13 +61,20 @@ import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 import { searchConversationMessages } from '../services/ragSearch';
 import { deleteMessageForCurrentUser } from '../db/messageRepository';
-import { sendOfflineChatMessage } from '../services/offlineMeshService';
+
 import { clearMessageSyncError } from '../db/messageRepository';
 import { subscribeToOfflineMessageSaved } from '../services/offlineMessageEvents';
 import {
+
+  waitForOfflineMeshPeer,
+} from '../services/offlineMeshService';
+
+
+import {
+  sendOfflineChatMessage,
+  sendOfflineDebugPing,
   hasOfflineMeshPeer,
   subscribeOfflineMeshPeers,
-  waitForOfflineMeshPeer,
 } from '../services/offlineMeshService';
 
 
@@ -650,9 +657,23 @@ export default function ChatScreen({ navigation, route }: Props) {
   }
 
   async function handleSend() {
+    console.log('[HANDLE SEND CALLED - LATEST CODE]');
+  
     const text = draft.trim();
   
+    console.log('[HANDLE SEND TEXT CHECK]', {
+      text,
+      draft,
+      isSending,
+      isCondensingMessage,
+    });
+  
     if (!text || isSending || isCondensingMessage) {
+      console.log('[HANDLE SEND RETURNED EARLY]', {
+        hasText: Boolean(text),
+        isSending,
+        isCondensingMessage,
+      });
       return;
     }
   
@@ -661,17 +682,23 @@ export default function ChatScreen({ navigation, route }: Props) {
     try {
       const messageId = await addMessage(conversationId, 'user', text, userId);
   
-      /*
-       * Only clear the composer after SQLite successfully stores the message.
-       * This prevents losing the user's draft if local saving fails.
-       */
+      console.log('[CHAT SEND LOCAL MESSAGE SAVED]', {
+        messageId,
+        conversationId,
+        userId,
+        body: text,
+      });
+  
       setDraft('');
       resetCondenseComposerState();
   
       /*
-       * Get latest conversation directly from SQLite.
-       * We need contactClerkUserId to send through Offline Protocol.
+       * Show local message immediately.
+       * Never block UI on BLE or Supabase.
        */
+      await loadThread();
+      scrollToBottom(true);
+  
       const conversation = await getConversationById(
         conversationId,
         userId ?? undefined,
@@ -680,68 +707,83 @@ export default function ChatScreen({ navigation, route }: Props) {
       const recipientClerkUserId = conversation?.contactClerkUserId ?? null;
       const participantKey = conversation?.participantKey ?? null;
   
-      console.log('Offline send check:', {
+      console.log('[CHATSCREEN BEFORE OFFLINE IF]', {
         userId,
-        conversationId,
-        messageId,
         recipientClerkUserId,
+        sameUser: userId === recipientClerkUserId,
+        conversationId,
         participantKey,
-        bodyLength: text.length,
         conversation,
       });
   
       /*
-       * Offline Protocol send.
-       * This should run before Supabase sync.
+       * Offline mesh send.
+       * Debug ping goes first.
+       * Real chat message goes second.
        */
       if (
         userId &&
         recipientClerkUserId &&
         recipientClerkUserId !== userId
       ) {
-        let isOfflinePeerReady = hasOfflineMeshPeer(recipientClerkUserId);
-
-        if (!isOfflinePeerReady) {
-          console.log('Waiting for offline mesh peer (up to 20s):', {
-            recipientClerkUserId,
-          });
-          isOfflinePeerReady = await waitForOfflineMeshPeer(
-            recipientClerkUserId,
-            20000,
-          );
-        }
-
-        console.log('Offline peer readiness check:', {
+        console.log('[MESH BOUNDARY BEFORE SERVICE CALL]', {
           recipientClerkUserId,
-          isOfflinePeerReady,
+          senderClerkUserId: userId,
+          localMessageId: messageId,
+          conversationId,
+          participantKey,
+          body: text,
+          isOfflinePeerReady: hasOfflineMeshPeer(recipientClerkUserId),
         });
-
-        if (!isOfflinePeerReady) {
-          console.warn(
-            'Recipient not in direct peer set; attempting mesh send anyway (multi-hop may still deliver).',
-            { recipientClerkUserId },
-          );
-        }
-
-        try {
-          const offlineMeshMessageId = await sendOfflineChatMessage({
-            recipientClerkUserId,
-            senderClerkUserId: userId,
-            localMessageId: messageId,
-            conversationId,
-            participantKey,
-            body: text,
-          });
-
-          console.log('Offline mesh send result:', {
-            localMessageId: messageId,
-            offlineMeshMessageId,
-          });
-        } catch (offlineError) {
-          console.warn('Offline mesh send failed:', offlineError);
-        }
+  
+        void (async () => {
+          try {
+            console.log('[OFFLINE DEBUG PING ABOUT TO SEND]', {
+              recipientClerkUserId,
+            });
+  
+            const debugPingMessageId = await sendOfflineDebugPing(
+              recipientClerkUserId,
+            );
+  
+            console.log('[OFFLINE DEBUG PING SENT]', {
+              debugPingMessageId,
+              recipientClerkUserId,
+            });
+  
+            console.log('[OFFLINE CHAT MESSAGE ABOUT TO SEND]', {
+              recipientClerkUserId,
+              senderClerkUserId: userId,
+              localMessageId: messageId,
+              conversationId,
+              participantKey,
+              body: text,
+            });
+  
+            const offlineMeshMessageId = await sendOfflineChatMessage({
+              recipientClerkUserId,
+              senderClerkUserId: userId,
+              localMessageId: messageId,
+              conversationId,
+              participantKey,
+              body: text,
+            });
+  
+            console.log('[MESH BOUNDARY AFTER SERVICE CALL]', {
+              localMessageId: messageId,
+              offlineMeshMessageId,
+            });
+  
+            console.log('[OFFLINE SEND SUCCESS]', {
+              localMessageId: messageId,
+              offlineMeshMessageId,
+            });
+          } catch (offlineError) {
+            console.warn('[OFFLINE SEND FAILED]', offlineError);
+          }
+        })();
       } else {
-        console.warn('Offline mesh send skipped:', {
+        console.warn('[OFFLINE SEND SKIPPED]', {
           hasUserId: Boolean(userId),
           hasRecipientClerkUserId: Boolean(recipientClerkUserId),
           recipientClerkUserId,
@@ -750,28 +792,24 @@ export default function ChatScreen({ navigation, route }: Props) {
         });
       }
   
-      await loadThread();
-      scrollToBottom(true);
-  
       /*
-       * Supabase sync remains separate.
-       * If internet is off, this may fail, but the local save already happened.
+       * Supabase sync stays separate.
        */
       if (userId) {
-        try {
-          await syncMessageById(messageId, userId, getClerkToken);
-        } catch (syncError) {
-          console.warn(
-            'Message saved locally. Supabase sync failed, keeping it queued:',
-            syncError,
-          );
-
-          await clearMessageSyncError(messageId);
-        }
-      }
+        void (async () => {
+          try {
+            await syncMessageById(messageId, userId, getClerkToken);
+            await loadThread();
+          } catch (syncError) {
+            console.warn(
+              'Message saved locally. Supabase sync failed, keeping it queued:',
+              syncError,
+            );
   
-      await loadThread();
-      scrollToBottom(true);
+            await clearMessageSyncError(messageId);
+          }
+        })();
+      }
     } catch (sendError) {
       console.warn('Failed to send message:', sendError);
       setError('Could not send message.');
