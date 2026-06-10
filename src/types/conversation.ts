@@ -4,18 +4,17 @@ export type Conversation = {
   createdAt: string;
   updatedAt: string;
 
-  remoteId?: string | null;
-  synced?: boolean;
-  syncError?: string | null;
+  remoteId: string | null;
+  synced: boolean;
+  syncError: string | null;
 
-  ownerClerkUserId?: string | null;
+  ownerClerkUserId: string | null;
 
-  contactName?: string | null;
-  contactEmail?: string | null;
-  contactNormalizedEmail?: string | null;
-  contactClerkUserId?: string | null;
-
-  participantKey?: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactNormalizedEmail: string | null;
+  contactClerkUserId: string | null;
+  participantKey: string | null;
 };
 
 export type ConversationCreateInput = {

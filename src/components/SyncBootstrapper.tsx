@@ -8,11 +8,20 @@ import { pullRemoteConversations } from '../services/conversationPull';
 import { getErrorMessage } from '../services/serviceErrors';
 import { archiveOldSyncedMessages } from '../db/maintenance';
 
+import {
+  setOfflineMeshIncomingMessageHandler,
+  startOfflineMesh,
+  stopOfflineMesh,
+} from '../services/offlineMeshService';
+
+import { handleIncomingOfflineMessage } from '../services/offlineMessageHandler';
+
 export default function SyncBootstrapper() {
   const { userId, getToken, isLoaded } = useAuth();
   const { user, isLoaded: isUserLoaded } = useUser();
 
   const lastSyncedUserRef = useRef<string | null>(null);
+  const meshStartedUserRef = useRef<string | null>(null);
 
   const primaryEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 
@@ -32,6 +41,59 @@ export default function SyncBootstrapper() {
     return 'User';
   }, [user?.fullName, user?.username, primaryEmail]);
 
+  useEffect(() => {
+    setOfflineMeshIncomingMessageHandler(async payload => {
+      console.log('Incoming offline message payload:', payload);
+
+      try {
+        await handleIncomingOfflineMessage(payload);
+      } catch (error) {
+        console.warn(
+          'Failed to save incoming offline message:',
+          getErrorMessage(error),
+        );
+      }
+    });
+  }, []);
+
+  /**
+   * Starts Offline Protocol Mesh after Clerk auth is ready.
+   *
+   * Mesh is stopped only on sign-out (userId cleared), not on effect cleanup,
+   * so React Strict Mode / re-renders do not tear down an active BLE session.
+   */
+  useEffect(() => {
+    if (!isLoaded || !isUserLoaded) {
+      return;
+    }
+
+    if (!userId) {
+      if (meshStartedUserRef.current) {
+        console.log('Stopping Offline Mesh after sign-out');
+        meshStartedUserRef.current = null;
+        void stopOfflineMesh();
+      }
+      return;
+    }
+
+    if (meshStartedUserRef.current === userId) {
+      return;
+    }
+
+    meshStartedUserRef.current = userId;
+
+    console.log('Starting Offline Mesh for user:', userId);
+
+    void startOfflineMesh(userId).catch(error => {
+      meshStartedUserRef.current = null;
+
+      console.warn('Offline Mesh failed to start:', getErrorMessage(error));
+    });
+  }, [isLoaded, isUserLoaded, userId]);
+
+  /**
+   * Existing Supabase sync bootstrap.
+   */
   useEffect(() => {
     async function runInitialSync() {
       console.log('SyncBootstrapper check:', {
@@ -91,7 +153,7 @@ export default function SyncBootstrapper() {
       }
     }
 
-    runInitialSync();
+    void runInitialSync();
   }, [
     isLoaded,
     isUserLoaded,
