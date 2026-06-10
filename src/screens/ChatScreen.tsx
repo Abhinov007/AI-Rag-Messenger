@@ -52,6 +52,7 @@ import { getConversationById, debugConversationOwners } from '../db/conversation
 import {
   addMessage,
   getMessagePageByConversationId,
+  markMessageSyncFailed,
 } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteMessagesForConversation } from '../services/messagePull';
@@ -75,6 +76,7 @@ import {
   sendOfflineDebugPing,
   hasOfflineMeshPeer,
   subscribeOfflineMeshPeers,
+  getOfflineMeshKnownPeers,
 } from '../services/offlineMeshService';
 
 

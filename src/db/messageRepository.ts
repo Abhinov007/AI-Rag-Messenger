@@ -844,8 +844,8 @@ export async function upsertRemoteMessageLocally({
     conversationId,
     senderType,
     senderClerkUserId,
-    body: trimmedBody,
-    createdAt,
+    body,
+    createdAt: normalizedCreatedAt,
   });
 
   const result = await db.runAsync(
