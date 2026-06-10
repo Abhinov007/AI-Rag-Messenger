@@ -840,6 +840,13 @@ export async function upsertRemoteMessageLocally({
   }
 
   try {
+    console.log('addMessage saving to SQLite:', {
+      conversationId,
+      senderType,
+      senderClerkUserId,
+      body: trimmedBody,
+      createdAt,
+    });
     const result = await db.runAsync(
       `
       INSERT INTO messages

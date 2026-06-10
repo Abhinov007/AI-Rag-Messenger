@@ -29,6 +29,9 @@ export async function syncMessageById(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
 ) {
+  if (!clerkUserId) {
+    throw new Error('clerkUserId is required to sync a message.');
+  }
   const message = await getMessageById(messageId, clerkUserId);
 
   if (!message || message.synced) {
@@ -161,6 +164,13 @@ async function pushMessageToSupabase(
     .single<RemoteMessageRow>();
 
   if (error) {
+    console.error('Supabase message sync ERROR:', {
+      localId: message.id,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
     const isDuplicateError =
       error.code === '23505' ||
       error.message.includes('duplicate key value') ||

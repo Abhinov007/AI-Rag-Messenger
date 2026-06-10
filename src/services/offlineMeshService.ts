@@ -348,10 +348,11 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   });
 
   meshAny.on('message_failed', event => {
-    console.warn('[OFFLINE MESSAGE FAILED]', {
+    console.warn('[OFFLINE MESSAGE FAILED event]', {
       messageId: getEventString(event, 'message_id'),
       reason: getEventString(event, 'reason'),
       retryCount: getEventNumber(event, 'retry_count'),
+      recipient: getEventString(event, 'recipient'),
       raw: event,
     });
   });
@@ -483,12 +484,12 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
 
     reliability: {
       ack: {
-        defaultTimeoutMs: 5000,
+        defaultTimeoutMs: 15000,
         maxPendingAcks: 1000,
       },
       retry: {
-        maxRetries: 5,
-        initialDelayMs: 1000,
+        maxRetries: 3,
+        initialDelayMs: 3000,
         maxDelayMs: 30000,
         backoffMultiplier: 2,
         outboxMaxLifetimeMs: 3600000,
@@ -703,7 +704,7 @@ export async function sendOfflineChatMessage(input: {
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
-      reject(new Error('chat sendMessage timed out after 10 seconds'));
+      reject(new Error(`chat sendMessage timed out after 10 seconds for recipient ${recipientClerkUserId}`));
     }, 10000);
   });
 
