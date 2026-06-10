@@ -11,6 +11,7 @@ export type Message = {
   summary: string | null;
   syncError: string | null;
   synced: boolean;
+  offlineSynced?: boolean;
 };
 
 export type MessageSaveInput = {
@@ -22,4 +23,5 @@ export type MessageSaveInput = {
   createdAt?: string;
   summary?: string | null;
   synced?: boolean;
+  offlineSynced?: boolean;
 };

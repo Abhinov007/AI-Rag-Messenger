@@ -25,6 +25,7 @@ type MessageRow = {
   remote_id: string | null;
   sync_error: string | null;
   synced: number;
+  offline_synced?: number;
   deleted_for_user?: number;
   deleted_at?: string | null;
   created_at: string;
@@ -51,6 +52,7 @@ function mapMessage(row: MessageRow): Message {
     summary: row.summary ?? null,
     syncError: row.sync_error ?? null,
     synced: row.synced !== 0,
+    offlineSynced: row.offline_synced !== 0,
   };
 }
 
@@ -140,6 +142,7 @@ function buildMessageHistoryQuery(currentClerkUserId?: string) {
         remote_id,
         sync_error,
         synced,
+        offline_synced,
         deleted_for_user,
         deleted_at,
         created_at,
@@ -161,6 +164,7 @@ function buildMessageHistoryQuery(currentClerkUserId?: string) {
         remote_id,
         sync_error,
         synced,
+        0 AS offline_synced,
         deleted_for_user,
         deleted_at,
         created_at,
@@ -222,6 +226,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
   const body = message.body.trim();
   const summary = message.summary ?? null;
   const synced = message.synced ? 1 : 0;
+  const offlineSynced = message.offlineSynced ? 1 : 0;
   const senderClerkUserId = message.senderClerkUserId ?? null;
   const createdAt =
     normalizeUtcTimestamp(message.createdAt) ?? getUtcNowIsoTimestamp();
@@ -235,6 +240,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
           body = ?,
           summary = ?,
           synced = ?,
+          offline_synced = ?,
           sync_error = NULL
       WHERE id = ? AND conversation_id = ?;
       `,
@@ -244,6 +250,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
         body,
         summary,
         synced,
+        offlineSynced,
         message.id,
         message.conversationId,
       ],
@@ -263,9 +270,10 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       summary,
       created_at,
       synced,
+      offline_synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, NULL);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL);
     `,
     [
       message.conversationId,
@@ -275,6 +283,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       summary,
       createdAt,
       synced,
+      offlineSynced,
     ],
   );
 
@@ -307,6 +316,7 @@ export async function getMessagesByConversationId(
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -381,6 +391,7 @@ export async function getMessagePageByConversationId({
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -428,6 +439,7 @@ export async function getMessageById(
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -474,6 +486,7 @@ export async function getUnsyncedMessages(
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -555,9 +568,10 @@ export async function addMessage(
       body,
       created_at,
       synced,
+      offline_synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, ?, 0, NULL);
+    VALUES (?, ?, ?, ?, ?, 0, 0, NULL);
     `,
     [
       conversationId,
@@ -951,6 +965,19 @@ export async function upsertRemoteMessageLocally({
 
     return duplicate.id;
   }
+}
+
+export async function markMessageOfflineSynced(messageId: number) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    UPDATE messages
+    SET offline_synced = 1
+    WHERE id = ?;
+    `,
+    [messageId],
+  );
 }
 
 export async function clearMessageSyncError(messageId: number): Promise<void> {

@@ -135,6 +135,13 @@ async function migrateLegacySchema(db: SQLiteDatabase) {
     'INTEGER NOT NULL DEFAULT 0',
   );
 
+  await ensureColumn(
+    db,
+    'messages',
+    'offline_synced',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
   // Message ownership field: needed for left/right chat alignment
   await ensureColumn(db, 'messages', 'sender_clerk_user_id', 'TEXT');
 
