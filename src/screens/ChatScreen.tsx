@@ -63,6 +63,10 @@ import { searchConversationMessages } from '../services/ragSearch';
 import { deleteMessageForCurrentUser } from '../db/messageRepository';
 import { sendOfflineChatMessage } from '../services/offlineMeshService';
 import { clearMessageSyncError } from '../db/messageRepository';
+import { subscribeToOfflineMessageSaved } from '../services/offlineMessageEvents';
+import {
+  hasOfflineMeshPeer,
+} from '../services/offlineMeshService';
 
 
 
@@ -139,6 +143,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     !isCondensePreviewVisible;
 
   const editedCondensedCharacterCount = editableCondensedText.trim().length;
+  const BLE_ONLY_TEST_MODE = true;
 
   const editedReductionPercent = condensedResult
     ? calculateDraftReductionPercent(
@@ -220,6 +225,21 @@ export default function ChatScreen({ navigation, route }: Props) {
     return conversation;
   }
 
+  useEffect(() => {
+    const unsubscribe = subscribeToOfflineMessageSaved(async event => {
+      if (event.localConversationId !== conversationId) {
+        return;
+      }
+  
+      console.log('ChatScreen refreshing after offline message saved:', event);
+  
+      await loadThread();
+      scrollToBottom(true);
+    });
+  
+    return unsubscribe;
+  }, [conversationId, userId]);
+
   async function handleLoadOlderMessages() {
     if (isLoadingOlder || !hasOlderMessages || messages.length === 0) {
       return;
@@ -248,6 +268,16 @@ export default function ChatScreen({ navigation, route }: Props) {
   }
 
   async function syncCurrentChat(options?: { showIndicator?: boolean }) {
+    if (BLE_ONLY_TEST_MODE) {
+      console.log('syncCurrentChat skipped for BLE-only test');
+      await loadThread();
+      return;
+    }
+  
+    if (activeSyncRef.current) {
+      return;
+    }
+
     if (activeSyncRef.current) {
       return;
     }
@@ -648,29 +678,61 @@ export default function ChatScreen({ navigation, route }: Props) {
        * Offline Protocol send.
        * This should run before Supabase sync.
        */
-      if (userId && recipientClerkUserId) {
-        try {
-          const offlineMeshMessageId = await sendOfflineChatMessage({
+      if (
+        userId &&
+        recipientClerkUserId &&
+        recipientClerkUserId !== userId
+      ) {
+        const isOfflinePeerReady = hasOfflineMeshPeer(recipientClerkUserId);
+  
+        console.log('Offline peer readiness check:', {
+          recipientClerkUserId,
+          isOfflinePeerReady,
+        });
+  
+        if (!isOfflinePeerReady) {
+          console.warn('Offline mesh send skipped: recipient peer not ready yet', {
             recipientClerkUserId,
-            senderClerkUserId: userId,
-            localMessageId: messageId,
-            conversationId,
-            participantKey,
-            body: text,
           });
   
-          console.log('Offline mesh send result:', {
-            localMessageId: messageId,
-            offlineMeshMessageId,
-          });
-        } catch (offlineError) {
-          console.warn('Offline mesh send failed:', offlineError);
+          await loadThread();
+          scrollToBottom(true);
+  
+          if (BLE_ONLY_TEST_MODE) {
+            console.log(
+              'Supabase sync intentionally skipped for BLE-only test because peer is not ready:',
+              {
+                messageId,
+                conversationId,
+              },
+            );
+            return;
+          }
+        } else {
+          try {
+            const offlineMeshMessageId = await sendOfflineChatMessage({
+              recipientClerkUserId,
+              senderClerkUserId: userId,
+              localMessageId: messageId,
+              conversationId,
+              participantKey,
+              body: text,
+            });
+  
+            console.log('Offline mesh send result:', {
+              localMessageId: messageId,
+              offlineMeshMessageId,
+            });
+          } catch (offlineError) {
+            console.warn('Offline mesh send failed:', offlineError);
+          }
         }
       } else {
         console.warn('Offline mesh send skipped:', {
           hasUserId: Boolean(userId),
           hasRecipientClerkUserId: Boolean(recipientClerkUserId),
           recipientClerkUserId,
+          sameUser: userId === recipientClerkUserId,
           conversation,
         });
       }
@@ -682,7 +744,12 @@ export default function ChatScreen({ navigation, route }: Props) {
        * Supabase sync remains separate.
        * If internet is off, this may fail, but the local save already happened.
        */
-      if (userId) {
+      if (BLE_ONLY_TEST_MODE) {
+        console.log('Supabase sync intentionally skipped for BLE-only test:', {
+          messageId,
+          conversationId,
+        });
+      } else if (userId) {
         try {
           await syncMessageById(messageId, userId, getClerkToken);
         } catch (syncError) {
@@ -691,9 +758,6 @@ export default function ChatScreen({ navigation, route }: Props) {
             syncError,
           );
   
-          /*
-           * Do not show "Failed · Tap to retry" only because internet is off.
-           */
           await clearMessageSyncError(messageId);
         }
       }

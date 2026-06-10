@@ -72,7 +72,7 @@ export async function pullRemoteConversations(
   const participantIds = Array.from(
     new Set(
       conversations
-        .flatMap((conversation) => [
+        .flatMap(conversation => [
           conversation.owner_clerk_user_id,
           conversation.contact_clerk_user_id,
         ])
@@ -91,23 +91,41 @@ export async function pullRemoteConversations(
   });
 
   for (const conversation of conversations) {
-    const title = getTitleForCurrentUser({
+    const localConversation = buildLocalConversationForCurrentUser({
       conversation,
       currentUserId: clerkUserId,
       appUsersByClerkId,
     });
 
+    console.log('Pulled conversation local mapping:', {
+      currentUserId: clerkUserId,
+      remoteId: conversation.id,
+      remoteOwnerClerkUserId: conversation.owner_clerk_user_id,
+      remoteContactClerkUserId: conversation.contact_clerk_user_id,
+      localOwnerClerkUserId: localConversation.ownerClerkUserId,
+      localContactClerkUserId: localConversation.contactClerkUserId,
+      title: localConversation.title,
+      contactEmail: localConversation.contactEmail,
+      participantKey: conversation.participant_key,
+    });
+
     try {
       await upsertPulledConversation({
         remoteId: conversation.id,
-        title,
+        title: localConversation.title,
 
-        ownerClerkUserId: conversation.owner_clerk_user_id,
+        /*
+         * Local meaning:
+         * owner = current logged-in user
+         * contact = the other participant
+         */
+        ownerClerkUserId: localConversation.ownerClerkUserId,
+        contactName: localConversation.contactName,
+        contactEmail: localConversation.contactEmail,
+        contactNormalizedEmail: localConversation.contactNormalizedEmail,
+        contactClerkUserId: localConversation.contactClerkUserId,
 
-        contactName: conversation.contact_name,
-        contactEmail: conversation.contact_email,
-        contactNormalizedEmail: conversation.contact_normalized_email,
-        contactClerkUserId: conversation.contact_clerk_user_id,
+        participantKey: conversation.participant_key,
 
         createdAt: conversation.created_at,
         updatedAt: conversation.updated_at,
@@ -118,6 +136,53 @@ export async function pullRemoteConversations(
       );
     }
   }
+}
+
+function buildLocalConversationForCurrentUser({
+  conversation,
+  currentUserId,
+  appUsersByClerkId,
+}: {
+  conversation: RemoteConversationRow;
+  currentUserId: string;
+  appUsersByClerkId: Map<string, RemoteAppUserRow>;
+}) {
+  const isCurrentUserOwner =
+    conversation.owner_clerk_user_id === currentUserId;
+
+  const peerClerkUserId = isCurrentUserOwner
+    ? conversation.contact_clerk_user_id
+    : conversation.owner_clerk_user_id;
+
+  const peerAppUser = appUsersByClerkId.get(peerClerkUserId ?? '');
+
+  const peerDisplayName =
+    getDisplayNameFromAppUser(peerAppUser) ||
+    conversation.contact_name?.trim() ||
+    conversation.title?.trim() ||
+    'New Chat';
+
+  const peerEmail =
+    peerAppUser?.email?.trim() ||
+    (isCurrentUserOwner ? conversation.contact_email?.trim() : null) ||
+    null;
+
+  const peerNormalizedEmail =
+    peerAppUser?.normalized_email?.trim().toLowerCase() ||
+    (isCurrentUserOwner
+      ? conversation.contact_normalized_email?.trim().toLowerCase()
+      : null) ||
+    peerEmail?.trim().toLowerCase() ||
+    null;
+
+  return {
+    title: peerDisplayName,
+    ownerClerkUserId: currentUserId,
+    contactClerkUserId: peerClerkUserId,
+    contactName: peerDisplayName,
+    contactEmail: peerEmail,
+    contactNormalizedEmail: peerNormalizedEmail,
+  };
 }
 
 async function fetchAppUsersByClerkId(
@@ -147,40 +212,6 @@ async function fetchAppUsersByClerkId(
   }
 
   return map;
-}
-
-function getTitleForCurrentUser({
-  conversation,
-  currentUserId,
-  appUsersByClerkId,
-}: {
-  conversation: RemoteConversationRow;
-  currentUserId: string;
-  appUsersByClerkId: Map<string, RemoteAppUserRow>;
-}) {
-  const isCurrentUserOwner =
-    conversation.owner_clerk_user_id === currentUserId;
-
-  const peerClerkUserId = isCurrentUserOwner
-    ? conversation.contact_clerk_user_id
-    : conversation.owner_clerk_user_id;
-
-  if (isCurrentUserOwner) {
-    return (
-      conversation.contact_name?.trim() ||
-      getDisplayNameFromAppUser(appUsersByClerkId.get(peerClerkUserId ?? '')) ||
-      conversation.contact_email?.trim() ||
-      conversation.title?.trim() ||
-      'New Chat'
-    );
-  }
-
-  return (
-    getDisplayNameFromAppUser(appUsersByClerkId.get(peerClerkUserId ?? '')) ||
-    conversation.title?.trim() ||
-    conversation.contact_name?.trim() ||
-    'New Chat'
-  );
 }
 
 function getDisplayNameFromAppUser(user?: RemoteAppUserRow) {

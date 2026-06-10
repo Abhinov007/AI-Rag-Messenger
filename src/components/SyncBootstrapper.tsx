@@ -134,7 +134,7 @@ export default function SyncBootstrapper() {
 
         await syncPendingConversations(userId, getClerkToken);
         await pullRemoteConversations(userId, getClerkToken);
-        await syncPendingMessages(userId, getClerkToken);
+        console.log('Supabase pending message sync disabled for BLE-only test');
 
         try {
           await archiveOldSyncedMessages();

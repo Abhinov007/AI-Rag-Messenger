@@ -29,15 +29,29 @@ let currentUserId: string | null = null;
 let status: OfflineMeshStatus = 'stopped';
 
 let incomingMessageHandler:
-  | ((payload: IncomingOfflineChatPayload, rawEvent: MeshEventPayload) => Promise<void>)
+  | ((
+      payload: IncomingOfflineChatPayload,
+      rawEvent: MeshEventPayload,
+    ) => Promise<void>)
   | null = null;
+
+const processedIncomingEventKeys = new Set<string>();
+
+const discoveredPeerIds = new Set<string>();
+
+export function hasOfflineMeshPeer(peerId: string): boolean {
+  return discoveredPeerIds.has(peerId);
+}
 
 export function getOfflineMeshStatus(): OfflineMeshStatus {
   return status;
 }
 
 export function setOfflineMeshIncomingMessageHandler(
-  handler: (payload: IncomingOfflineChatPayload, rawEvent: MeshEventPayload) => Promise<void>,
+  handler: (
+    payload: IncomingOfflineChatPayload,
+    rawEvent: MeshEventPayload,
+  ) => Promise<void>,
 ) {
   console.log('Offline mesh incoming message handler registered');
   incomingMessageHandler = handler;
@@ -59,6 +73,19 @@ function getEventNumber(
   const value = event[key];
 
   return typeof value === 'number' ? value : null;
+}
+
+function getIncomingEventDedupeKey(
+  event: MeshEventPayload,
+  rawContent: string | null,
+): string {
+  const messageId =
+    getEventString(event, 'message_id') ??
+    getEventString(event, 'messageId') ??
+    getEventString(event, 'id') ??
+    'no-message-id';
+
+  return `${messageId}:${rawContent ?? 'no-content'}`;
 }
 
 function getPossibleRawContent(event: MeshEventPayload): string | null {
@@ -101,9 +128,25 @@ async function handlePossibleIncomingMessage(
 
   try {
     const rawContent = getPossibleRawContent(event);
+    const dedupeKey = getIncomingEventDedupeKey(event, rawContent);
+
+    if (processedIncomingEventKeys.has(dedupeKey)) {
+      console.log('[OFFLINE INCOMING EVENT DUPLICATE SKIPPED]', {
+        eventName,
+        dedupeKey,
+      });
+      return;
+    }
+
+    processedIncomingEventKeys.add(dedupeKey);
+
+    if (processedIncomingEventKeys.size > 500) {
+      processedIncomingEventKeys.clear();
+    }
 
     console.log('[OFFLINE INCOMING CONTENT CANDIDATES]', {
       eventName,
+      type: event.type,
       content: event.content,
       message: event.message,
       payload: event.payload,
@@ -160,9 +203,31 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
     ) => void;
   };
 
+  meshAny.on('all', event => {
+    console.log('[OFFLINE EVENT ALL]', {
+      type: event?.type,
+      event,
+    });
+
+    if (event?.type === 'message_received') {
+      void handlePossibleIncomingMessage('message_received/all', event);
+    }
+
+    if (event?.type === 'group_message_received') {
+      void handlePossibleIncomingMessage('group_message_received/all', event);
+    }
+  });
+
   meshAny.on('neighbor_discovered', event => {
+    const peerId = getEventString(event, 'peer_id');
+  
+    if (peerId) {
+      discoveredPeerIds.add(peerId);
+    }
+  
     console.log('[OFFLINE PEER FOUND]', {
-      peerId: getEventString(event, 'peer_id'),
+      peerId,
+      knownPeers: Array.from(discoveredPeerIds),
       transport: getEventString(event, 'transport'),
       rssi: getEventNumber(event, 'rssi'),
       raw: event,
@@ -170,8 +235,15 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   });
 
   meshAny.on('neighbor_lost', event => {
+    const peerId = getEventString(event, 'peer_id');
+  
+    if (peerId) {
+      discoveredPeerIds.delete(peerId);
+    }
+  
     console.log('[OFFLINE PEER LOST]', {
-      peerId: getEventString(event, 'peer_id'),
+      peerId,
+      knownPeers: Array.from(discoveredPeerIds),
       raw: event,
     });
   });
@@ -184,9 +256,18 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
     });
   });
 
+  meshAny.on('secure_session_failed', event => {
+    console.log('[OFFLINE SECURE SESSION FAILED]', {
+      peerId: getEventString(event, 'peer_id'),
+      reason: getEventString(event, 'reason'),
+      raw: event,
+    });
+  });
+
   meshAny.on('message_sent', event => {
     console.log('[OFFLINE MESSAGE SENT]', {
       messageId: getEventString(event, 'message_id'),
+      sender: getEventString(event, 'sender'),
       recipient: getEventString(event, 'recipient'),
       raw: event,
     });
@@ -211,21 +292,28 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
     });
   });
 
-  /**
-   * The SDK docs mention message_received, but your logs show BLE delivery
-   * without this listener firing. So we listen to multiple possible JS bridge
-   * names to confirm which one the native layer emits.
-   */
   meshAny.on('message_received', event => {
     void handlePossibleIncomingMessage('message_received', event);
   });
 
-  meshAny.on('message', event => {
-    void handlePossibleIncomingMessage('message', event);
+  meshAny.on('group_message_received', event => {
+    void handlePossibleIncomingMessage('group_message_received', event);
   });
 
   meshAny.on('messageReceived', event => {
     void handlePossibleIncomingMessage('messageReceived', event);
+  });
+
+  meshAny.on('MessageReceived', event => {
+    void handlePossibleIncomingMessage('MessageReceived', event);
+  });
+
+  meshAny.on('groupMessageReceived', event => {
+    void handlePossibleIncomingMessage('groupMessageReceived', event);
+  });
+
+  meshAny.on('GroupMessageReceived', event => {
+    void handlePossibleIncomingMessage('GroupMessageReceived', event);
   });
 
   meshAny.on('data_received', event => {
@@ -242,6 +330,14 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
 
   meshAny.on('payloadReceived', event => {
     void handlePossibleIncomingMessage('payloadReceived', event);
+  });
+
+  meshAny.on('service_message', event => {
+    void handlePossibleIncomingMessage('service_message', event);
+  });
+
+  meshAny.on('serviceMessage', event => {
+    void handlePossibleIncomingMessage('serviceMessage', event);
   });
 
   meshAny.on('transport_switched', event => {
@@ -305,7 +401,7 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
       enabled: false,
       autoKeyExchange: false,
       storePending: false,
-      requireEncryption: false,    
+      requireEncryption: false,
       pendingQueue: {
         maxPendingPerPeer: 64,
         maxPendingGlobal: 4096,
@@ -404,17 +500,19 @@ export async function sendOfflineChatMessage(input: {
     clientMessageId: String(localMessageId),
     senderClerkUserId,
     recipientClerkUserId,
+    conversationId,
+    participantKey,
     body,
     createdAt: new Date().toISOString(),
   };
-  
+
   const content = JSON.stringify(payload);
-  
+
   console.log('Offline payload size:', {
     chars: content.length,
     content,
   });
-  
+
   const messageId = await protocol.sendMessage({
     recipient: recipientClerkUserId,
     content,
@@ -431,6 +529,7 @@ export async function sendOfflineChatMessage(input: {
 
 export async function stopOfflineMesh(): Promise<void> {
   if (!protocol) {
+    discoveredPeerIds.clear();
     status = 'stopped';
     currentUserId = null;
     return;
@@ -440,6 +539,7 @@ export async function stopOfflineMesh(): Promise<void> {
     await protocol.stop();
     await protocol.destroy();
   } finally {
+    discoveredPeerIds.clear();
     protocol = null;
     currentUserId = null;
     status = 'stopped';

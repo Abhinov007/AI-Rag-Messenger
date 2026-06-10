@@ -1,5 +1,6 @@
 import { getDatabase } from '../db/database';
 import { getUtcNowIsoTimestamp } from '../utils/timestamps';
+import { emitOfflineMessageSaved } from './offlineMessageEvents';
 
 type IncomingOfflineChatPayload = {
   clientMessageId: string;
@@ -12,7 +13,7 @@ type IncomingOfflineChatPayload = {
 };
 
 function buildParticipantKey(userA: string, userB: string): string {
-  return [userA, userB].sort().join(':');
+  return [userA, userB].sort().join('__');
 }
 
 export async function handleIncomingOfflineMessage(
@@ -65,12 +66,18 @@ export async function handleIncomingOfflineMessage(
           owner_clerk_user_id = ?
           AND contact_clerk_user_id = ?
          )
+         OR (
+          owner_clerk_user_id = ?
+          AND contact_clerk_user_id = ?
+         )
       LIMIT 1;
       `,
       [
         participantKey,
         payload.recipientClerkUserId,
         payload.senderClerkUserId,
+        payload.senderClerkUserId,
+        payload.recipientClerkUserId,
       ],
     );
 
@@ -152,6 +159,13 @@ export async function handleIncomingOfflineMessage(
     console.log('Saved incoming offline message:', {
       localConversationId,
       offlineRemoteId,
+      body: payload.body,
+    });
+    emitOfflineMessageSaved({
+      localConversationId,
+      participantKey,
+      senderClerkUserId: payload.senderClerkUserId,
+      recipientClerkUserId: payload.recipientClerkUserId,
       body: payload.body,
     });
   });
