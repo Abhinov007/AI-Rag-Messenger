@@ -1,4 +1,7 @@
-import { OfflineProtocol } from '@offline-protocol/mesh-sdk';
+import {
+  MessagePriority,
+  OfflineProtocol,
+} from '@offline-protocol/mesh-sdk';
 
 import { requestOfflineMeshPermissions } from './offlinePermissions';
 
@@ -36,15 +39,59 @@ let incomingMessageHandler:
   | null = null;
 
 const processedIncomingEventKeys = new Set<string>();
-
 const discoveredPeerIds = new Set<string>();
+const peerChangeListeners = new Set<() => void>();
+
+function notifyPeerChangeListeners() {
+  for (const listener of peerChangeListeners) {
+    listener();
+  }
+}
+
+export function getOfflineMeshStatus(): OfflineMeshStatus {
+  return status;
+}
+
+export function getOfflineMeshKnownPeers(): string[] {
+  return Array.from(discoveredPeerIds);
+}
+
+export function subscribeOfflineMeshPeers(listener: () => void): () => void {
+  peerChangeListeners.add(listener);
+
+  return () => {
+    peerChangeListeners.delete(listener);
+  };
+}
 
 export function hasOfflineMeshPeer(peerId: string): boolean {
   return discoveredPeerIds.has(peerId);
 }
 
-export function getOfflineMeshStatus(): OfflineMeshStatus {
-  return status;
+export async function waitForOfflineMeshPeer(
+  peerId: string,
+  timeoutMs = 30000,
+): Promise<boolean> {
+  if (discoveredPeerIds.has(peerId)) {
+    return true;
+  }
+
+  const startedAt = Date.now();
+
+  return new Promise(resolve => {
+    const interval = setInterval(() => {
+      if (discoveredPeerIds.has(peerId)) {
+        clearInterval(interval);
+        resolve(true);
+        return;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        clearInterval(interval);
+        resolve(false);
+      }
+    }, 500);
+  });
 }
 
 export function setOfflineMeshIncomingMessageHandler(
@@ -195,6 +242,31 @@ async function handlePossibleIncomingMessage(
   }
 }
 
+async function ensureBluetoothReady(mesh: OfflineProtocolInstance) {
+  const meshAny = mesh as unknown as {
+    isBluetoothEnabled?: () => Promise<boolean>;
+    requestEnableBluetooth?: () => Promise<boolean>;
+  };
+
+  if (!meshAny.isBluetoothEnabled) {
+    return;
+  }
+
+  const enabled = await meshAny.isBluetoothEnabled();
+
+  if (enabled) {
+    return;
+  }
+
+  if (meshAny.requestEnableBluetooth) {
+    const prompted = await meshAny.requestEnableBluetooth();
+
+    if (!prompted) {
+      throw new Error('Bluetooth must be enabled for offline mesh messaging.');
+    }
+  }
+}
+
 function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   const meshAny = mesh as unknown as {
     on: (
@@ -208,23 +280,16 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
       type: event?.type,
       event,
     });
-
-    if (event?.type === 'message_received') {
-      void handlePossibleIncomingMessage('message_received/all', event);
-    }
-
-    if (event?.type === 'group_message_received') {
-      void handlePossibleIncomingMessage('group_message_received/all', event);
-    }
   });
 
   meshAny.on('neighbor_discovered', event => {
     const peerId = getEventString(event, 'peer_id');
-  
+
     if (peerId) {
       discoveredPeerIds.add(peerId);
+      notifyPeerChangeListeners();
     }
-  
+
     console.log('[OFFLINE PEER FOUND]', {
       peerId,
       knownPeers: Array.from(discoveredPeerIds),
@@ -236,11 +301,12 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
 
   meshAny.on('neighbor_lost', event => {
     const peerId = getEventString(event, 'peer_id');
-  
+
     if (peerId) {
       discoveredPeerIds.delete(peerId);
+      notifyPeerChangeListeners();
     }
-  
+
     console.log('[OFFLINE PEER LOST]', {
       peerId,
       knownPeers: Array.from(discoveredPeerIds),
@@ -292,6 +358,16 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
     });
   });
 
+  meshAny.on('message_deferred', event => {
+    console.warn('[OFFLINE MESSAGE DEFERRED]', {
+      messageId: getEventString(event, 'message_id'),
+      reason: getEventString(event, 'reason'),
+      retryCount: getEventNumber(event, 'retry_count'),
+      nextRetryAt: getEventNumber(event, 'next_retry_at'),
+      raw: event,
+    });
+  });
+
   meshAny.on('message_received', event => {
     void handlePossibleIncomingMessage('message_received', event);
   });
@@ -300,6 +376,10 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
     void handlePossibleIncomingMessage('group_message_received', event);
   });
 
+  /*
+   * Defensive listeners while debugging.
+   * These should normally not fire if SDK follows documented snake_case events.
+   */
   meshAny.on('messageReceived', event => {
     void handlePossibleIncomingMessage('messageReceived', event);
   });
@@ -442,6 +522,8 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
   registerOfflineMeshEvents(protocol);
 
   try {
+    await ensureBluetoothReady(protocol);
+
     await protocol.start();
 
     status = 'running';
@@ -453,6 +535,8 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
     status = 'error';
     protocol = null;
     currentUserId = null;
+    discoveredPeerIds.clear();
+    notifyPeerChangeListeners();
 
     console.error('Failed to start Offline Mesh:', error);
 
@@ -484,6 +568,7 @@ export async function sendOfflineChatMessage(input: {
     recipientClerkUserId,
     localMessageId,
     conversationId,
+    knownPeers: Array.from(discoveredPeerIds),
     bodyLength: body.length,
   });
 
@@ -493,6 +578,13 @@ export async function sendOfflineChatMessage(input: {
       hasProtocol: Boolean(protocol),
     });
     return null;
+  }
+
+  if (!discoveredPeerIds.has(recipientClerkUserId)) {
+    console.warn('Offline mesh send warning: recipient is not in discovered peer set', {
+      recipientClerkUserId,
+      knownPeers: Array.from(discoveredPeerIds),
+    });
   }
 
   const payload: IncomingOfflineChatPayload = {
@@ -516,6 +608,7 @@ export async function sendOfflineChatMessage(input: {
   const messageId = await protocol.sendMessage({
     recipient: recipientClerkUserId,
     content,
+    priority: MessagePriority.High,
   });
 
   console.log('Offline message queued:', {
@@ -530,6 +623,7 @@ export async function sendOfflineChatMessage(input: {
 export async function stopOfflineMesh(): Promise<void> {
   if (!protocol) {
     discoveredPeerIds.clear();
+    notifyPeerChangeListeners();
     status = 'stopped';
     currentUserId = null;
     return;
@@ -540,8 +634,97 @@ export async function stopOfflineMesh(): Promise<void> {
     await protocol.destroy();
   } finally {
     discoveredPeerIds.clear();
+    notifyPeerChangeListeners();
     protocol = null;
     currentUserId = null;
     status = 'stopped';
+  }
+}
+
+export async function logOfflineMeshDebugState(
+  label: string,
+  recipientClerkUserId?: string | null,
+): Promise<void> {
+  if (!protocol) {
+    console.log('[OFFLINE DEBUG STATE]', {
+      label,
+      hasProtocol: false,
+      status,
+      recipientClerkUserId,
+      knownPeers: Array.from(discoveredPeerIds),
+    });
+    return;
+  }
+
+  try {
+    const meshAny = protocol as unknown as {
+      getState?: () => Promise<unknown>;
+      getActiveTransports?: () => Promise<unknown>;
+      isBluetoothEnabled?: () => Promise<boolean>;
+      getBLePeerCount?: () => Promise<number>;
+      hasRoute?: (destination: string) => Promise<boolean>;
+      getBestRoute?: (destination: string) => Promise<unknown>;
+      getRetryQueueSize?: () => Promise<number>;
+      getPendingAckCount?: () => Promise<number>;
+    };
+
+    const [
+      protocolState,
+      activeTransports,
+      bluetoothEnabled,
+      blePeerCount,
+      hasRoute,
+      bestRoute,
+      retryQueueSize,
+      pendingAckCount,
+    ] = await Promise.all([
+      meshAny.getState?.().catch(error => `getState failed: ${String(error)}`),
+      meshAny
+        .getActiveTransports?.()
+        .catch(error => `getActiveTransports failed: ${String(error)}`),
+      meshAny
+        .isBluetoothEnabled?.()
+        .catch(error => `isBluetoothEnabled failed: ${String(error)}`),
+      meshAny
+        .getBLePeerCount?.()
+        .catch(error => `getBLePeerCount failed: ${String(error)}`),
+      recipientClerkUserId
+        ? meshAny
+            .hasRoute?.(recipientClerkUserId)
+            .catch(error => `hasRoute failed: ${String(error)}`)
+        : Promise.resolve(null),
+      recipientClerkUserId
+        ? meshAny
+            .getBestRoute?.(recipientClerkUserId)
+            .catch(error => `getBestRoute failed: ${String(error)}`)
+        : Promise.resolve(null),
+      meshAny
+        .getRetryQueueSize?.()
+        .catch(error => `getRetryQueueSize failed: ${String(error)}`),
+      meshAny
+        .getPendingAckCount?.()
+        .catch(error => `getPendingAckCount failed: ${String(error)}`),
+    ]);
+
+    console.log('[OFFLINE DEBUG STATE]', {
+      label,
+      status,
+      recipientClerkUserId,
+      knownPeers: Array.from(discoveredPeerIds),
+      protocolState,
+      activeTransports,
+      bluetoothEnabled,
+      blePeerCount,
+      hasRoute,
+      bestRoute,
+      retryQueueSize,
+      pendingAckCount,
+    });
+  } catch (error) {
+    console.warn('[OFFLINE DEBUG STATE FAILED]', {
+      label,
+      recipientClerkUserId,
+      error,
+    });
   }
 }

@@ -41,16 +41,38 @@ export default function SyncBootstrapper() {
     return 'User';
   }, [user?.fullName, user?.username, primaryEmail]);
 
+  useEffect(() => {
+    setOfflineMeshIncomingMessageHandler(async payload => {
+      console.log('Incoming offline message payload:', payload);
+
+      try {
+        await handleIncomingOfflineMessage(payload);
+      } catch (error) {
+        console.warn(
+          'Failed to save incoming offline message:',
+          getErrorMessage(error),
+        );
+      }
+    });
+  }, []);
+
   /**
    * Starts Offline Protocol Mesh after Clerk auth is ready.
    *
-   * This is separate from Supabase sync because offline mesh should stay
-   * active even if Supabase sync fails.
+   * Mesh is stopped only on sign-out (userId cleared), not on effect cleanup,
+   * so React Strict Mode / re-renders do not tear down an active BLE session.
    */
   useEffect(() => {
-    if (!isLoaded || !isUserLoaded || !userId) {
-      void stopOfflineMesh();
-      meshStartedUserRef.current = null;
+    if (!isLoaded || !isUserLoaded) {
+      return;
+    }
+
+    if (!userId) {
+      if (meshStartedUserRef.current) {
+        console.log('Stopping Offline Mesh after sign-out');
+        meshStartedUserRef.current = null;
+        void stopOfflineMesh();
+      }
       return;
     }
 
@@ -62,31 +84,11 @@ export default function SyncBootstrapper() {
 
     console.log('Starting Offline Mesh for user:', userId);
 
-    setOfflineMeshIncomingMessageHandler(async payload => {
-      console.log('Incoming offline message payload:', payload);
-    
-      try {
-        await handleIncomingOfflineMessage(payload);
-      } catch (error) {
-        console.warn('Failed to save incoming offline message:', getErrorMessage(error));
-      }
-    });
-
     void startOfflineMesh(userId).catch(error => {
       meshStartedUserRef.current = null;
 
-      console.warn(
-        'Offline Mesh failed to start:',
-        getErrorMessage(error),
-      );
+      console.warn('Offline Mesh failed to start:', getErrorMessage(error));
     });
-
-    return () => {
-      console.log('Stopping Offline Mesh for user:', userId);
-
-      meshStartedUserRef.current = null;
-      void stopOfflineMesh();
-    };
   }, [isLoaded, isUserLoaded, userId]);
 
   /**
@@ -134,7 +136,7 @@ export default function SyncBootstrapper() {
 
         await syncPendingConversations(userId, getClerkToken);
         await pullRemoteConversations(userId, getClerkToken);
-        console.log('Supabase pending message sync disabled for BLE-only test');
+        await syncPendingMessages(userId, getClerkToken);
 
         try {
           await archiveOldSyncedMessages();

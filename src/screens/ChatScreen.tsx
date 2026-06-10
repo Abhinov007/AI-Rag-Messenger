@@ -66,6 +66,8 @@ import { clearMessageSyncError } from '../db/messageRepository';
 import { subscribeToOfflineMessageSaved } from '../services/offlineMessageEvents';
 import {
   hasOfflineMeshPeer,
+  subscribeOfflineMeshPeers,
+  waitForOfflineMeshPeer,
 } from '../services/offlineMeshService';
 
 
@@ -104,7 +106,10 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [summaryText, setSummaryText] = useState('');
   const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
   const [error, setError] = useState('');
-
+  const [contactClerkUserId, setContactClerkUserId] = useState<string | null>(
+    null,
+  );
+  const [isOfflinePeerNearby, setIsOfflinePeerNearby] = useState(false);
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const subscriptionKeyRef = useRef<string | null>(null);
@@ -143,7 +148,6 @@ export default function ChatScreen({ navigation, route }: Props) {
     !isCondensePreviewVisible;
 
   const editedCondensedCharacterCount = editableCondensedText.trim().length;
-  const BLE_ONLY_TEST_MODE = true;
 
   const editedReductionPercent = condensedResult
     ? calculateDraftReductionPercent(
@@ -211,6 +215,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   
     setTitle(conversation.title ?? 'Chat');
+    setContactClerkUserId(conversation.contactClerkUserId ?? null);
     setError('');
   
     const page = await getMessagePageByConversationId({
@@ -224,6 +229,27 @@ export default function ChatScreen({ navigation, route }: Props) {
   
     return conversation;
   }
+
+  useEffect(() => {
+    if (!contactClerkUserId) {
+      setIsOfflinePeerNearby(false);
+      return;
+    }
+
+    const refreshPeerStatus = () => {
+      setIsOfflinePeerNearby(hasOfflineMeshPeer(contactClerkUserId));
+    };
+
+    refreshPeerStatus();
+
+    const interval = setInterval(refreshPeerStatus, 2000);
+    const unsubscribePeers = subscribeOfflineMeshPeers(refreshPeerStatus);
+
+    return () => {
+      clearInterval(interval);
+      unsubscribePeers();
+    };
+  }, [contactClerkUserId]);
 
   useEffect(() => {
     const unsubscribe = subscribeToOfflineMessageSaved(async event => {
@@ -268,16 +294,6 @@ export default function ChatScreen({ navigation, route }: Props) {
   }
 
   async function syncCurrentChat(options?: { showIndicator?: boolean }) {
-    if (BLE_ONLY_TEST_MODE) {
-      console.log('syncCurrentChat skipped for BLE-only test');
-      await loadThread();
-      return;
-    }
-  
-    if (activeSyncRef.current) {
-      return;
-    }
-
     if (activeSyncRef.current) {
       return;
     }
@@ -683,49 +699,46 @@ export default function ChatScreen({ navigation, route }: Props) {
         recipientClerkUserId &&
         recipientClerkUserId !== userId
       ) {
-        const isOfflinePeerReady = hasOfflineMeshPeer(recipientClerkUserId);
-  
+        let isOfflinePeerReady = hasOfflineMeshPeer(recipientClerkUserId);
+
+        if (!isOfflinePeerReady) {
+          console.log('Waiting for offline mesh peer (up to 20s):', {
+            recipientClerkUserId,
+          });
+          isOfflinePeerReady = await waitForOfflineMeshPeer(
+            recipientClerkUserId,
+            20000,
+          );
+        }
+
         console.log('Offline peer readiness check:', {
           recipientClerkUserId,
           isOfflinePeerReady,
         });
-  
+
         if (!isOfflinePeerReady) {
-          console.warn('Offline mesh send skipped: recipient peer not ready yet', {
+          console.warn(
+            'Recipient not in direct peer set; attempting mesh send anyway (multi-hop may still deliver).',
+            { recipientClerkUserId },
+          );
+        }
+
+        try {
+          const offlineMeshMessageId = await sendOfflineChatMessage({
             recipientClerkUserId,
+            senderClerkUserId: userId,
+            localMessageId: messageId,
+            conversationId,
+            participantKey,
+            body: text,
           });
-  
-          await loadThread();
-          scrollToBottom(true);
-  
-          if (BLE_ONLY_TEST_MODE) {
-            console.log(
-              'Supabase sync intentionally skipped for BLE-only test because peer is not ready:',
-              {
-                messageId,
-                conversationId,
-              },
-            );
-            return;
-          }
-        } else {
-          try {
-            const offlineMeshMessageId = await sendOfflineChatMessage({
-              recipientClerkUserId,
-              senderClerkUserId: userId,
-              localMessageId: messageId,
-              conversationId,
-              participantKey,
-              body: text,
-            });
-  
-            console.log('Offline mesh send result:', {
-              localMessageId: messageId,
-              offlineMeshMessageId,
-            });
-          } catch (offlineError) {
-            console.warn('Offline mesh send failed:', offlineError);
-          }
+
+          console.log('Offline mesh send result:', {
+            localMessageId: messageId,
+            offlineMeshMessageId,
+          });
+        } catch (offlineError) {
+          console.warn('Offline mesh send failed:', offlineError);
         }
       } else {
         console.warn('Offline mesh send skipped:', {
@@ -744,12 +757,7 @@ export default function ChatScreen({ navigation, route }: Props) {
        * Supabase sync remains separate.
        * If internet is off, this may fail, but the local save already happened.
        */
-      if (BLE_ONLY_TEST_MODE) {
-        console.log('Supabase sync intentionally skipped for BLE-only test:', {
-          messageId,
-          conversationId,
-        });
-      } else if (userId) {
+      if (userId) {
         try {
           await syncMessageById(messageId, userId, getClerkToken);
         } catch (syncError) {
@@ -757,7 +765,7 @@ export default function ChatScreen({ navigation, route }: Props) {
             'Message saved locally. Supabase sync failed, keeping it queued:',
             syncError,
           );
-  
+
           await clearMessageSyncError(messageId);
         }
       }
@@ -940,6 +948,19 @@ export default function ChatScreen({ navigation, route }: Props) {
 
           {isSyncing ? (
             <Text style={styles.syncingText}>Syncing...</Text>
+          ) : null}
+
+          {contactClerkUserId ? (
+            <Text
+              style={[
+                styles.meshStatusText,
+                isOfflinePeerNearby && styles.meshStatusTextNearby,
+              ]}
+            >
+              {isOfflinePeerNearby
+                ? 'Nearby · BLE ready'
+                : 'Searching for nearby device...'}
+            </Text>
           ) : null}
         </View>
 
@@ -1618,6 +1639,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     marginTop: 2,
+  },
+  meshStatusText: {
+    color: '#8AA398',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  meshStatusTextNearby: {
+    color: '#25D366',
   },
   aiBtn: {
     alignItems: 'center',
