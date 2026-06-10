@@ -53,6 +53,7 @@ import {
   addMessage,
   getMessagePageByConversationId,
   markMessageSyncFailed,
+  markMessageOfflineSynced,
 } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteMessagesForConversation } from '../services/messagePull';
@@ -769,6 +770,9 @@ export default function ChatScreen({ navigation, route }: Props) {
               body: text,
             });
 
+            await markMessageOfflineSynced(messageId);
+            await loadThread();
+
             console.log('[OFFLINE SEND SUCCESS]', {
               localMessageId: messageId,
               offlineMeshMessageId,
@@ -958,11 +962,15 @@ export default function ChatScreen({ navigation, route }: Props) {
       return 'Failed · Tap to retry';
     }
 
-    if (!message.synced) {
-      return 'Sending...';
+    if (message.synced) {
+      return 'Sent';
     }
 
-    return 'Sent';
+    if (message.offlineSynced) {
+      return 'Sent (Mesh)';
+    }
+
+    return 'Sending...';
   }
 
   return (

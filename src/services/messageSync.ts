@@ -164,6 +164,17 @@ async function pushMessageToSupabase(
     .single<RemoteMessageRow>();
 
   if (error) {
+    const isNetworkError =
+      error.message?.includes('Network request failed') ||
+      error.message?.includes('fetch');
+
+    if (isNetworkError) {
+      console.warn('Supabase sync deferred: device appears to be offline.', {
+        localId: message.id,
+      });
+      throw error; // Let the caller handle the retry/queue logic.
+    }
+
     console.error('Supabase message sync ERROR:', {
       localId: message.id,
       code: error.code,
