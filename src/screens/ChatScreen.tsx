@@ -48,10 +48,11 @@ import {
   type RagAnswerResult,
 } from '../ai/localLlamaAssistant';
 
-import { getConversationById } from '../db/conversationRepository';
+import { getConversationById, debugConversationOwners } from '../db/conversationRepository';
 import {
   addMessage,
   getMessagePageByConversationId,
+  markMessageSyncFailed,
 } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteMessagesForConversation } from '../services/messagePull';
@@ -75,6 +76,7 @@ import {
   sendOfflineDebugPing,
   hasOfflineMeshPeer,
   subscribeOfflineMeshPeers,
+  getOfflineMeshKnownPeers,
 } from '../services/offlineMeshService';
 
 
@@ -215,6 +217,10 @@ export default function ChatScreen({ navigation, route }: Props) {
       userId ?? undefined,
     );
   
+    if (__DEV__) {
+      await debugConversationOwners();
+    }
+
     if (!conversation) {
       setError('Conversation not found.');
       setMessages([]);
@@ -222,6 +228,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   
     setTitle(conversation.title ?? 'Chat');
+    console.log('[CHATSCREEN LOADED CONVERSATION]', { conversationId: conversation.id, contactClerkUserId: conversation.contactClerkUserId });
     setContactClerkUserId(conversation.contactClerkUserId ?? null);
     setError('');
   
@@ -244,7 +251,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
 
     const refreshPeerStatus = () => {
-      setIsOfflinePeerNearby(hasOfflineMeshPeer(contactClerkUserId));
+      const isNearby = hasOfflineMeshPeer(contactClerkUserId!);
+      console.log('[MESH PEER CHECK]', { contactClerkUserId, isNearby, knownPeers: getOfflineMeshKnownPeers() });
+      setIsOfflinePeerNearby(isNearby);
     };
 
     refreshPeerStatus();
@@ -354,6 +363,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     } catch (syncError) {
       console.warn('Current chat sync failed. Will retry later:', syncError);
     } finally {
+      await loadThread();
       activeSyncRef.current = false;
 
       if (options?.showIndicator) {
@@ -680,6 +690,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     setIsSending(true);
   
     try {
+      console.log('[CHAT SEND START]', { conversationId, userId, text });
       const messageId = await addMessage(conversationId, 'user', text, userId);
   
       console.log('[CHAT SEND LOCAL MESSAGE SAVED]', {
@@ -704,6 +715,8 @@ export default function ChatScreen({ navigation, route }: Props) {
         userId ?? undefined,
       );
   
+      console.log('[CHAT SEND CONVERSATION FETCHED]', conversation);
+
       const recipientClerkUserId = conversation?.contactClerkUserId ?? null;
       const participantKey = conversation?.participantKey ?? null;
   
@@ -738,19 +751,6 @@ export default function ChatScreen({ navigation, route }: Props) {
   
         void (async () => {
           try {
-            console.log('[OFFLINE DEBUG PING ABOUT TO SEND]', {
-              recipientClerkUserId,
-            });
-  
-            const debugPingMessageId = await sendOfflineDebugPing(
-              recipientClerkUserId,
-            );
-  
-            console.log('[OFFLINE DEBUG PING SENT]', {
-              debugPingMessageId,
-              recipientClerkUserId,
-            });
-  
             console.log('[OFFLINE CHAT MESSAGE ABOUT TO SEND]', {
               recipientClerkUserId,
               senderClerkUserId: userId,
@@ -759,7 +759,7 @@ export default function ChatScreen({ navigation, route }: Props) {
               participantKey,
               body: text,
             });
-  
+
             const offlineMeshMessageId = await sendOfflineChatMessage({
               recipientClerkUserId,
               senderClerkUserId: userId,
@@ -768,18 +768,16 @@ export default function ChatScreen({ navigation, route }: Props) {
               participantKey,
               body: text,
             });
-  
-            console.log('[MESH BOUNDARY AFTER SERVICE CALL]', {
-              localMessageId: messageId,
-              offlineMeshMessageId,
-            });
-  
+
             console.log('[OFFLINE SEND SUCCESS]', {
               localMessageId: messageId,
               offlineMeshMessageId,
             });
           } catch (offlineError) {
             console.warn('[OFFLINE SEND FAILED]', offlineError);
+            const errorMsg = offlineError instanceof Error ? offlineError.message : String(offlineError);
+            await markMessageSyncFailed(messageId, `Offline: ${errorMsg}`);
+            await loadThread();
           }
         })();
       } else {
@@ -807,6 +805,7 @@ export default function ChatScreen({ navigation, route }: Props) {
             );
   
             await clearMessageSyncError(messageId);
+            await loadThread();
           }
         })();
       }
