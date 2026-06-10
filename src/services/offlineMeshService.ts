@@ -483,12 +483,12 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
 
     reliability: {
       ack: {
-        defaultTimeoutMs: 5000,
+        defaultTimeoutMs: 15000,
         maxPendingAcks: 1000,
       },
       retry: {
-        maxRetries: 5,
-        initialDelayMs: 1000,
+        maxRetries: 3,
+        initialDelayMs: 3000,
         maxDelayMs: 30000,
         backoffMultiplier: 2,
         outboxMaxLifetimeMs: 3600000,

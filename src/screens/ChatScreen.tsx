@@ -738,19 +738,6 @@ export default function ChatScreen({ navigation, route }: Props) {
   
         void (async () => {
           try {
-            console.log('[OFFLINE DEBUG PING ABOUT TO SEND]', {
-              recipientClerkUserId,
-            });
-  
-            const debugPingMessageId = await sendOfflineDebugPing(
-              recipientClerkUserId,
-            );
-  
-            console.log('[OFFLINE DEBUG PING SENT]', {
-              debugPingMessageId,
-              recipientClerkUserId,
-            });
-  
             console.log('[OFFLINE CHAT MESSAGE ABOUT TO SEND]', {
               recipientClerkUserId,
               senderClerkUserId: userId,
@@ -759,7 +746,7 @@ export default function ChatScreen({ navigation, route }: Props) {
               participantKey,
               body: text,
             });
-  
+
             const offlineMeshMessageId = await sendOfflineChatMessage({
               recipientClerkUserId,
               senderClerkUserId: userId,
@@ -768,12 +755,7 @@ export default function ChatScreen({ navigation, route }: Props) {
               participantKey,
               body: text,
             });
-  
-            console.log('[MESH BOUNDARY AFTER SERVICE CALL]', {
-              localMessageId: messageId,
-              offlineMeshMessageId,
-            });
-  
+
             console.log('[OFFLINE SEND SUCCESS]', {
               localMessageId: messageId,
               offlineMeshMessageId,
