@@ -348,10 +348,11 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   });
 
   meshAny.on('message_failed', event => {
-    console.warn('[OFFLINE MESSAGE FAILED]', {
+    console.warn('[OFFLINE MESSAGE FAILED EVENT]', {
       messageId: getEventString(event, 'message_id'),
       reason: getEventString(event, 'reason'),
       retryCount: getEventNumber(event, 'retry_count'),
+      recipient: getEventString(event, 'recipient'),
       raw: event,
     });
   });
@@ -703,7 +704,7 @@ export async function sendOfflineChatMessage(input: {
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
-      reject(new Error('chat sendMessage timed out after 10 seconds'));
+      reject(new Error(`chat sendMessage timed out after 10 seconds for recipient ${recipientClerkUserId}`));
     }, 10000);
   });
 
