@@ -302,10 +302,10 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
     },
 
     encryption: {
-      enabled: true,
-      autoKeyExchange: true,
-      storePending: true,
-      requireEncryption: false,
+      enabled: false,
+      autoKeyExchange: false,
+      storePending: false,
+      requireEncryption: false,    
       pendingQueue: {
         maxPendingPerPeer: 64,
         maxPendingGlobal: 4096,
@@ -404,15 +404,20 @@ export async function sendOfflineChatMessage(input: {
     clientMessageId: String(localMessageId),
     senderClerkUserId,
     recipientClerkUserId,
-    conversationId,
-    participantKey,
     body,
     createdAt: new Date().toISOString(),
   };
-
+  
+  const content = JSON.stringify(payload);
+  
+  console.log('Offline payload size:', {
+    chars: content.length,
+    content,
+  });
+  
   const messageId = await protocol.sendMessage({
     recipient: recipientClerkUserId,
-    content: JSON.stringify(payload),
+    content,
   });
 
   console.log('Offline message queued:', {

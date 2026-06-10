@@ -622,21 +622,18 @@ export default function ChatScreen({ navigation, route }: Props) {
       setDraft('');
       resetCondenseComposerState();
   
-      await loadThread();
-      scrollToBottom(true);
-  
       /*
-       * Get the latest conversation directly here.
-       * This avoids useState/scope issues with offlineRecipientClerkUserId.
+       * Get latest conversation directly from SQLite.
+       * We need contactClerkUserId to send through Offline Protocol.
        */
       const conversation = await getConversationById(
         conversationId,
         userId ?? undefined,
       );
-      
+  
       const recipientClerkUserId = conversation?.contactClerkUserId ?? null;
       const participantKey = conversation?.participantKey ?? null;
-      
+  
       console.log('Offline send check:', {
         userId,
         conversationId,
@@ -644,19 +641,31 @@ export default function ChatScreen({ navigation, route }: Props) {
         recipientClerkUserId,
         participantKey,
         bodyLength: text.length,
+        conversation,
       });
-      
+  
+      /*
+       * Offline Protocol send.
+       * This should run before Supabase sync.
+       */
       if (userId && recipientClerkUserId) {
-        void sendOfflineChatMessage({
-          recipientClerkUserId,
-          senderClerkUserId: userId,
-          localMessageId: messageId,
-          conversationId,
-          participantKey,
-          body: text,
-        }).catch((offlineError: unknown) => {
+        try {
+          const offlineMeshMessageId = await sendOfflineChatMessage({
+            recipientClerkUserId,
+            senderClerkUserId: userId,
+            localMessageId: messageId,
+            conversationId,
+            participantKey,
+            body: text,
+          });
+  
+          console.log('Offline mesh send result:', {
+            localMessageId: messageId,
+            offlineMeshMessageId,
+          });
+        } catch (offlineError) {
           console.warn('Offline mesh send failed:', offlineError);
-        });
+        }
       } else {
         console.warn('Offline mesh send skipped:', {
           hasUserId: Boolean(userId),
@@ -666,49 +675,12 @@ export default function ChatScreen({ navigation, route }: Props) {
         });
       }
   
-      const offlineConversation = conversation as {
-        contactClerkUserId?: string | null;
-        participantKey?: string | null;
-      } | null;
-  
-
-  
-      console.log('Offline send check:', {
-        userId,
-        conversationId,
-        messageId,
-        recipientClerkUserId,
-        participantKey,
-        bodyLength: text.length,
-      });
-  
-      /*
-       * Offline Protocol send.
-       * This does not need internet. It only needs BLE mesh to be running.
-       */
-      if (userId && recipientClerkUserId) {
-        void sendOfflineChatMessage({
-          recipientClerkUserId,
-          senderClerkUserId: userId,
-          localMessageId: messageId,
-          conversationId,
-          participantKey,
-          body: text,
-        }).catch((offlineError: unknown) => {
-          console.warn('Offline mesh send failed:', offlineError);
-        });
-      } else {
-        console.warn('Offline mesh send skipped:', {
-          hasUserId: Boolean(userId),
-          hasRecipientClerkUserId: Boolean(recipientClerkUserId),
-          recipientClerkUserId,
-        });
-      }
+      await loadThread();
+      scrollToBottom(true);
   
       /*
        * Supabase sync remains separate.
-       * If internet is off, this may fail, but local save + offline mesh send
-       * already happened above.
+       * If internet is off, this may fail, but the local save already happened.
        */
       if (userId) {
         try {
@@ -718,11 +690,9 @@ export default function ChatScreen({ navigation, route }: Props) {
             'Message saved locally. Supabase sync failed, keeping it queued:',
             syncError,
           );
-      
-          /**
-           * Important:
-           * Supabase/Clerk network failure should NOT make the chat bubble red.
-           * The message is already saved locally and offline mesh may still deliver it.
+  
+          /*
+           * Do not show "Failed · Tap to retry" only because internet is off.
            */
           await clearMessageSyncError(messageId);
         }
