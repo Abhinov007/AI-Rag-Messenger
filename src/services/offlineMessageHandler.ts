@@ -16,6 +16,12 @@ function buildParticipantKey(userA: string, userB: string): string {
   return [userA, userB].sort().join('__');
 }
 
+/**
+ * Handles an incoming offline message by saving it locally and creating a conversation if needed.
+ * Deduplicates messages using the offline remote ID and emits an event when the message is saved.
+ * @param payload - The incoming offline chat message payload
+ * @throws Error if the database transaction fails
+ */
 export async function handleIncomingOfflineMessage(
   payload: IncomingOfflineChatPayload,
 ): Promise<void> {

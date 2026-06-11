@@ -30,6 +30,13 @@ type RemoteAppUserRow = {
   display_name: string | null;
 };
 
+/**
+ * Pulls remote conversations from Supabase for the current user and saves them locally.
+ * Fetches conversations where the user is either the owner or contact participant.
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws Error if Supabase client is missing or if any conversation fails to save
+ */
 export async function pullRemoteConversations(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
@@ -138,6 +145,14 @@ export async function pullRemoteConversations(
   }
 }
 
+/**
+ * Builds a local conversation representation for the current user from a remote conversation.
+ * Determines which user is the owner and which is the contact, and retrieves display information.
+ * @param conversation - The remote conversation data
+ * @param currentUserId - The ID of the current logged-in user
+ * @param appUsersByClerkId - Map of app users indexed by their Clerk IDs
+ * @returns Local conversation object with owner/contact perspective adjusted for current user
+ */
 function buildLocalConversationForCurrentUser({
   conversation,
   currentUserId,
@@ -185,6 +200,13 @@ function buildLocalConversationForCurrentUser({
   };
 }
 
+/**
+ * Fetches app user profiles from Supabase by their Clerk IDs.
+ * @param clerkUserIds - Array of Clerk user IDs to fetch
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @returns Map of app users indexed by Clerk ID
+ * @throws Error if the Supabase query fails
+ */
 async function fetchAppUsersByClerkId(
   clerkUserIds: string[],
   getClerkToken: GetClerkToken,
@@ -214,6 +236,11 @@ async function fetchAppUsersByClerkId(
   return map;
 }
 
+/**
+ * Extracts the display name from an app user, with fallback to email addresses.
+ * @param user - The app user object
+ * @returns The display name, email, or null if no suitable value is found
+ */
 function getDisplayNameFromAppUser(user?: RemoteAppUserRow) {
   if (!user) {
     return null;

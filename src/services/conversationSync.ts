@@ -13,6 +13,13 @@ type RemoteConversationRow = {
   id: string;
 };
 
+/**
+ * Creates a participant key by sorting two user IDs and joining them with '__'.
+ * Used as a unique identifier for a conversation between two specific users.
+ * @param ownerClerkUserId - The first participant's Clerk user ID
+ * @param contactClerkUserId - The second participant's Clerk user ID
+ * @returns The participant key, or null if either ID is missing
+ */
 function buildParticipantKey(
   ownerClerkUserId?: string | null,
   contactClerkUserId?: string | null,
@@ -24,6 +31,13 @@ function buildParticipantKey(
   return [ownerClerkUserId, contactClerkUserId].sort().join('__');
 }
 
+/**
+ * Syncs all unsynced conversations for the current user to Supabase.
+ * Attempts to push each conversation and collects any errors that occur.
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws AggregateError if one or more conversations fail to sync
+ */
 export async function syncPendingConversations(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
@@ -53,6 +67,14 @@ export async function syncPendingConversations(
   );
 }
 
+/**
+ * Pushes a single conversation to Supabase, creating or updating the remote record.
+ * Handles duplicate participant key errors by recovering the existing remote ID.
+ * @param conversation - The local conversation to push
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws Error if the push fails or if required conversation data is missing
+ */
 async function pushConversationToSupabase(
   conversation: Conversation,
   clerkUserId: string,

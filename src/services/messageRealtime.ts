@@ -14,6 +14,16 @@ type RemoteMessagePayload = {
   created_at: string;
 };
 
+/**
+ * Subscribes to real-time message updates for a specific conversation using Supabase.
+ * Automatically saves incoming messages from other users to the local database.
+ * @param localConversationId - The local conversation ID
+ * @param remoteConversationId - The remote conversation ID from Supabase
+ * @param currentClerkUserId - The current user's Clerk ID (own messages are skipped)
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @param onMessageSaved - Callback to invoke when a message is successfully saved
+ * @returns The Supabase channel object, or null if Supabase is not configured
+ */
 export function subscribeToConversationMessages({
   localConversationId,
   remoteConversationId,

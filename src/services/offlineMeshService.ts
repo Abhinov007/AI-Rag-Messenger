@@ -59,20 +59,36 @@ const peerChangeListeners = new Set<() => void>();
 
 let receivePollTimer: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * Notifies all registered listeners of changes to discovered peers.
+ */
 function notifyPeerChangeListeners() {
   for (const listener of peerChangeListeners) {
     listener();
   }
 }
 
+/**
+ * Gets the current status of the offline mesh protocol.
+ * @returns The current offline mesh status ('stopped', 'starting', 'running', 'permission_denied', or 'error')
+ */
 export function getOfflineMeshStatus(): OfflineMeshStatus {
   return status;
 }
 
+/**
+ * Gets the list of all discovered peer IDs in the mesh network.
+ * @returns Array of discovered peer IDs
+ */
 export function getOfflineMeshKnownPeers(): string[] {
   return Array.from(discoveredPeerIds);
 }
 
+/**
+ * Subscribes a listener to be notified when peers are discovered or lost.
+ * @param listener - Callback function to be called when peer list changes
+ * @returns Unsubscribe function to remove the listener
+ */
 export function subscribeOfflineMeshPeers(listener: () => void): () => void {
   peerChangeListeners.add(listener);
 
@@ -81,10 +97,21 @@ export function subscribeOfflineMeshPeers(listener: () => void): () => void {
   };
 }
 
+/**
+ * Checks if a specific peer is currently known/discovered in the mesh network.
+ * @param peerId - The ID of the peer to check
+ * @returns True if the peer is known, false otherwise
+ */
 export function hasOfflineMeshPeer(peerId: string): boolean {
   return discoveredPeerIds.has(peerId);
 }
 
+/**
+ * Waits for a specific peer to be discovered in the mesh network, with optional timeout.
+ * @param peerId - The ID of the peer to wait for
+ * @param timeoutMs - Maximum time to wait in milliseconds (default: 30000)
+ * @returns Promise that resolves to true if peer is found, false if timeout occurs
+ */
 export async function waitForOfflineMeshPeer(
   peerId: string,
   timeoutMs = 30000,
@@ -111,6 +138,10 @@ export async function waitForOfflineMeshPeer(
   });
 }
 
+/**
+ * Sets or clears the handler function for incoming mesh messages.
+ * @param handler - Handler function to process incoming messages, or null to clear the handler
+ */
 export function setOfflineMeshIncomingMessageHandler(
   handler:
     | ((
@@ -128,6 +159,12 @@ export function setOfflineMeshIncomingMessageHandler(
   incomingMessageHandler = handler;
 }
 
+/**
+ * Extracts a string value from an event object by key.
+ * @param event - The event object
+ * @param key - The property key to extract
+ * @returns The string value if present, null otherwise
+ */
 function getEventString(
   event: MeshEventPayload,
   key: string,
@@ -136,6 +173,12 @@ function getEventString(
   return typeof value === 'string' ? value : null;
 }
 
+/**
+ * Extracts a numeric value from an event object by key.
+ * @param event - The event object
+ * @param key - The property key to extract
+ * @returns The numeric value if present, null otherwise
+ */
 function getEventNumber(
   event: MeshEventPayload,
   key: string,
@@ -144,6 +187,11 @@ function getEventNumber(
   return typeof value === 'number' ? value : null;
 }
 
+/**
+ * Extracts the peer ID from an event object by checking multiple possible key names.
+ * @param event - The event object
+ * @returns The peer ID if found, null otherwise
+ */
 function getPeerIdFromEvent(event: MeshEventPayload): string | null {
   return (
     getEventString(event, 'peer_id') ??
@@ -155,6 +203,12 @@ function getPeerIdFromEvent(event: MeshEventPayload): string | null {
   );
 }
 
+/**
+ * Generates a deduplication key for an incoming event to prevent processing duplicates.
+ * @param event - The event object
+ * @param rawContent - The raw content of the message
+ * @returns A unique string key combining message ID and content
+ */
 function getIncomingEventDedupeKey(
   event: MeshEventPayload,
   rawContent: string | null,
@@ -168,6 +222,11 @@ function getIncomingEventDedupeKey(
   return `${messageId}:${rawContent ?? 'no-content'}`;
 }
 
+/**
+ * Attempts to extract raw message content from an event by checking multiple possible fields.
+ * @param event - The event object
+ * @returns The raw content as a string if found, null otherwise
+ */
 function getPossibleRawContent(event: MeshEventPayload): string | null {
   const candidates = [
     event.content,
@@ -200,6 +259,11 @@ function getPossibleRawContent(event: MeshEventPayload): string | null {
   return null;
 }
 
+/**
+ * Processes incoming mesh events, deduplicates them, parses the payload, and invokes the registered handler.
+ * @param eventName - The name of the event
+ * @param event - The event payload
+ */
 async function handlePossibleIncomingMessage(
   eventName: string,
   event: MeshEventPayload,
@@ -283,6 +347,11 @@ async function handlePossibleIncomingMessage(
   }
 }
 
+/**
+ * Ensures that Bluetooth is enabled, requesting user permission if necessary.
+ * @param mesh - The offline protocol instance
+ * @throws Error if Bluetooth must be enabled but is not available
+ */
 async function ensureBluetoothReady(mesh: OfflineProtocolInstance) {
   const meshAny = mesh as unknown as {
     isBluetoothEnabled?: () => Promise<boolean>;
@@ -308,6 +377,12 @@ async function ensureBluetoothReady(mesh: OfflineProtocolInstance) {
   }
 }
 
+/**
+ * Extracts a boolean value from an event object by key.
+ * @param event - The event object
+ * @param key - The property key to extract
+ * @returns The boolean value if present, null otherwise
+ */
 function getEventBoolean(
   event: MeshEventPayload,
   key: string,
@@ -321,6 +396,9 @@ function getEventBoolean(
   return null;
 }
 
+/**
+ * Stops the interval-based polling for receiving messages.
+ */
 function stopOfflineReceivePolling() {
   if (receivePollTimer) {
     clearInterval(receivePollTimer);
@@ -328,6 +406,10 @@ function stopOfflineReceivePolling() {
   }
 }
 
+/**
+ * Starts an interval-based polling mechanism to receive incoming messages from the protocol.
+ * @param mesh - The offline protocol instance to poll for messages
+ */
 function startOfflineReceivePolling(mesh: OfflineProtocolInstance) {
   stopOfflineReceivePolling();
 
@@ -361,6 +443,10 @@ function startOfflineReceivePolling(mesh: OfflineProtocolInstance) {
   console.log('[OFFLINE RECEIVE POLL STARTED]');
 }
 
+/**
+ * Runs diagnostic checks after the protocol has started, including transport selection and peer counts.
+ * @param mesh - The offline protocol instance
+ */
 async function runOfflinePostStartDiagnostics(mesh: OfflineProtocolInstance) {
   const meshAny = mesh as unknown as {
     forceTransport?: (type: 'ble' | 'internet' | 'wifiDirect') => Promise<void>;
@@ -398,6 +484,10 @@ async function runOfflinePostStartDiagnostics(mesh: OfflineProtocolInstance) {
   }
 }
 
+/**
+ * Logs diagnostic information about the mesh send status and transport metrics.
+ * @param label - A label to identify the diagnostic point in the code
+ */
 async function logOfflineMeshSendDiagnostics(label: string) {
   if (!protocol) {
     console.log('[OFFLINE SEND DIAGNOSTICS SKIPPED] protocol missing', {
@@ -457,6 +547,10 @@ async function logOfflineMeshSendDiagnostics(label: string) {
   }
 }
 
+/**
+ * Registers event listeners for all mesh protocol events including peer discovery, message delivery, and diagnostics.
+ * @param mesh - The offline protocol instance
+ */
 function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   const meshAny = mesh as unknown as {
     on?: (eventName: string, listener: (event: MeshEventPayload) => void) => void;
@@ -609,6 +703,12 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   });
 }
 
+/**
+ * Initializes and starts the offline mesh protocol for a user.
+ * Requests Bluetooth permissions, configures the protocol, and starts peer discovery.
+ * @param clerkUserId - The Clerk user ID to start the mesh with
+ * @throws Error if Bluetooth permissions are denied or protocol startup fails
+ */
 export async function startOfflineMesh(clerkUserId: string): Promise<void> {
   if (protocol && currentUserId === clerkUserId && status === 'running') {
     console.log('[OFFLINE MESH START SKIPPED] already running', {
@@ -721,6 +821,10 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
   }
 }
 
+/**
+ * Stops the offline mesh protocol and cleans up all resources.
+ * Halts peer discovery, polling, and closes the protocol connection.
+ */
 export async function stopOfflineMesh(): Promise<void> {
   stopOfflineReceivePolling();
 
@@ -755,6 +859,13 @@ export async function stopOfflineMesh(): Promise<void> {
   }
 }
 
+/**
+ * Sends a debug ping message to a peer over the offline mesh.
+ * Validates protocol status and peer availability before sending.
+ * @param recipientClerkUserId - The Clerk user ID of the recipient peer
+ * @returns The message ID returned by the protocol
+ * @throws Error if protocol is null, not running, or peer is not discovered
+ */
 export async function sendOfflineDebugPing(
   recipientClerkUserId: string,
 ): Promise<string> {
@@ -829,6 +940,13 @@ export async function sendOfflineDebugPing(
   return String(messageId);
 }
 
+/**
+ * Sends a plain text ping message to a peer over the offline mesh.
+ * Validates protocol status and peer availability before sending.
+ * @param recipientClerkUserId - The Clerk user ID of the recipient peer
+ * @returns The message ID returned by the protocol
+ * @throws Error if protocol is null, not running, or peer is not discovered
+ */
 export async function sendOfflinePlainTextPing(
   recipientClerkUserId: string,
 ): Promise<string> {
@@ -881,6 +999,13 @@ export async function sendOfflinePlainTextPing(
   return String(messageId);
 }
 
+/**
+ * Sends a chat message to a peer over the offline mesh with conversation context.
+ * Validates protocol status and peer availability, then serializes and sends the message.
+ * @param input - Object containing recipient ID, sender ID, message content, and conversation metadata
+ * @returns The message ID returned by the protocol
+ * @throws Error if protocol is null, not running, or peer is not discovered
+ */
 export async function sendOfflineChatMessage(input: {
   recipientClerkUserId: string;
   senderClerkUserId: string;

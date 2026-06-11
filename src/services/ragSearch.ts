@@ -22,6 +22,11 @@ export type RetrievedChatMessage = {
   rank: number;
 };
 
+/**
+ * Escapes special regular expression characters in a string for literal matching.
+ * @param value - The string to escape
+ * @returns The escaped string safe for use in RegExp
+ */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -58,6 +63,17 @@ function createRetrievalSearchText(
   return withoutParticipantName || trimmedQuestion;
 }
 
+/**
+ * Searches messages in a conversation using Supabase RAG (Retrieval-Augmented Generation).
+ * Filters out participant names from the search query to improve relevance.
+ * @param remoteConversationId - The remote conversation ID from Supabase
+ * @param question - The user's question or search query
+ * @param participantName - Optional name of the conversation participant to exclude from search
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @param matchCount - Maximum number of matching messages to return (default: 8)
+ * @returns Array of retrieved messages ranked by relevance
+ * @throws Error if Supabase is not configured or the search query fails
+ */
 export async function searchConversationMessages({
   remoteConversationId,
   question,

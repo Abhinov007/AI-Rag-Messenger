@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Single-conversation thread: loads messages from SQLite, supports sending,
  * pulls remote messages, subscribes to realtime Supabase inserts,
  * supports pull-to-refresh, retries sync, shows message sync status,
@@ -204,17 +204,30 @@ export default function ChatScreen({ navigation, route }: Props) {
     return () => clearTimeout(timer);
   }, [isAiMenuVisible, pendingAskChatOpen]);
 
+  /**
+   * Scrolls the message list to the bottom, optionally with animation.
+   * @param animated - Whether to animate the scroll (default: true)
+   */
   function scrollToBottom(animated = true) {
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToEnd({ animated });
     });
   }
 
+  /**
+   * Retrieves the Supabase authentication token from Clerk.
+   * @returns The Clerk token as a string, or null if unavailable
+   */
   async function getClerkToken(): Promise<string | null> {
     const token = await getTokenRef.current({ template: 'supabase' });
     return typeof token === 'string' ? token : null;
   }
 
+  /**
+   * Loads the conversation and its messages from the local SQLite database.
+   * Sets the conversation title and loads the first page of messages.
+   * @returns The conversation object, or null if not found
+   */
   async function loadThread() {
     const conversation = await getConversationById(
       conversationId,
@@ -286,6 +299,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     return unsubscribe;
   }, [conversationId, userId]);
 
+  /**
+   * Loads older messages before the earliest message in the current list.
+   * Updates the local message state with the older messages prepended.
+   */
   async function handleLoadOlderMessages() {
     if (isLoadingOlder || !hasOlderMessages || messages.length === 0) {
       return;
@@ -313,6 +330,11 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Syncs pending messages to Supabase and pulls new remote messages.
+   * Optionally displays a loading indicator during the sync.
+   * @param options - Optional configuration for the sync operation
+   */
   async function syncCurrentChat(options?: { showIndicator?: boolean }) {
     if (activeSyncRef.current) {
       return;
@@ -376,6 +398,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Sends a debug ping to the contact using the offline mesh protocol.
+   * Useful for testing BLE connectivity.
+   */
   async function handleOfflineDebugPing() {
     if (!contactClerkUserId) {
       console.warn('[DEBUG PING BLOCKED] missing contact clerk user id');
@@ -398,6 +424,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Handles a pull-to-refresh action by reloading local and syncing remote messages.
+   */
   async function handleRefresh() {
     setIsRefreshing(true);
 
@@ -417,6 +446,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Retries sending a failed message to Supabase.
+   * @param message - The message to retry
+   */
   async function handleRetryMessage(message: Message) {
     if (!userId || retryingMessageId === message.id) {
       return;
@@ -435,6 +468,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Deletes a message for the current user with a confirmation dialog.
+   * @param message - The message to delete
+   */
   const handleDeleteMessage = useCallback(
     (message: Message) => {
       Alert.alert(
@@ -584,6 +621,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     };
   }, [conversationId, userId]);
 
+  /**
+   * Resets all message condenser UI state after dismissing or applying condensed text.
+   */
   function resetCondenseComposerState() {
     setIsCondensingMessage(false);
     setIsCondensePreviewVisible(false);
@@ -594,6 +634,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     setAppliedCondensedDraft('');
   }
 
+  /**
+   * Updates the draft text and resets condensing UI when the text changes.
+   * @param text - The new draft text
+   */
   function handleDraftChange(text: string) {
     setDraft(text);
     setCondenseError('');
@@ -603,6 +647,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Initiates the message condensation process using local AI model.
+   * Generates a shortened version of the current draft text.
+   */
   async function handleCondenseOutgoingDraft() {
     const originalDraft = draft.trim();
 
@@ -651,11 +699,17 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Dismisses the condense suggestion and marks the draft as not eligible for condensing.
+   */
   function handleDismissCondenseOffer() {
     setCondenseError('');
     setDismissedCondenseDraft(draft.trim());
   }
 
+  /**
+   * Dismisses the condensed preview and reverts to using the original draft.
+   */
   function handleKeepOriginalDraft() {
     Keyboard.dismiss();
     setIsCondensePreviewVisible(false);
@@ -665,6 +719,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     setDismissedCondenseDraft(draft.trim());
   }
 
+  /**
+   * Approves the condensed text and uses it as the new draft message.
+   */
   function handleUseCondensedDraft() {
     const approvedCondensedText = editableCondensedText.trim();
 
@@ -692,6 +749,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     setEditableCondensedText('');
   }
 
+  /**
+   * Sends the current draft message to the conversation.
+   * Saves locally, syncs to Supabase, and sends over offline mesh if a peer is available.
+   */
   async function handleSend() {
     console.log('[HANDLE SEND CALLED - LATEST CODE]');
   
@@ -846,6 +907,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Summarizes recent messages in the conversation using local AI model.
+   */
   async function handleSummarizeChat() {
     setIsAiMenuVisible(false);
 
@@ -871,6 +935,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Generates reply suggestions for the recent messages using local AI model.
+   */
   async function handleSuggestReplies() {
     setIsAiMenuVisible(false);
 
@@ -900,6 +967,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Opens the RAG (Retrieval-Augmented Generation) ask chat modal.
+   */
   function handleOpenAskChat() {
     if (pendingAskChatOpen || isAskChatVisible) {
       return;
@@ -911,6 +981,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     setIsAiMenuVisible(false);
   }
   
+  /**
+   * Searches conversation messages and generates an answer to a question using RAG.
+   */
   async function handleAskAboutChat() {
     const question = ragQuestion.trim();
   
@@ -973,18 +1046,28 @@ export default function ChatScreen({ navigation, route }: Props) {
     console.log('Ask About Chat submitted:', question);
   }
 
+  /**
+   * Inserts a suggested reply into the draft text and closes the suggestions modal.
+   * @param suggestion - The suggested reply text
+   */
   function handlePickSuggestion(suggestion: string) {
     setDraft(suggestion);
     setIsReplyModalVisible(false);
   }
 
+  /**
+   * Gets the current sync status of a message sent by the current user.
+   * Returns a descriptive status string for UI display.
+   * @param message - The message to check status for
+   * @returns The status text to display
+   */
   function getOwnMessageStatus(message: Message) {
     if (retryingMessageId === message.id) {
       return 'Retrying...';
     }
 
     if (message.syncError) {
-      return 'Failed · Tap to retry';
+      return 'Failed Â· Tap to retry';
     }
 
     if (message.synced) {
@@ -1028,7 +1111,7 @@ export default function ChatScreen({ navigation, route }: Props) {
               ]}
             >
               {isOfflinePeerNearby
-                ? 'Nearby · BLE ready'
+                ? 'Nearby Â· BLE ready'
                 : 'Searching for nearby device...'}
             </Text>
           ) : null}
@@ -2360,3 +2443,6 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   }
 });
+
+
+

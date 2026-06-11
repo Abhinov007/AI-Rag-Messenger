@@ -1,5 +1,10 @@
 import { PermissionsAndroid, Platform } from 'react-native';
 
+/**
+ * Requests necessary Bluetooth and location permissions for offline mesh messaging.
+ * Permission requirements vary based on Android version.
+ * @returns True if all required permissions are granted, false otherwise
+ */
 export async function requestOfflineMeshPermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') {
     return true;

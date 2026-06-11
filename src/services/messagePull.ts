@@ -18,6 +18,15 @@ type RemoteMessageRow = {
   created_at: string;
 };
 
+/**
+ * Pulls remote messages from Supabase for a specific conversation and saves them locally.
+ * Only fetches messages newer than the latest message already stored locally.
+ * @param localConversationId - The local conversation ID
+ * @param remoteConversationId - The remote conversation ID from Supabase
+ * @param currentClerkUserId - Optional current user's Clerk ID for filtering
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws Error if Supabase client is missing or if any message fails to save
+ */
 export async function pullRemoteMessagesForConversation({
   localConversationId,
   remoteConversationId,
