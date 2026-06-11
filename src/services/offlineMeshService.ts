@@ -769,30 +769,34 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
     },
   
     network: {
-      initialTtl: 1,
+      // Allow messages to hop through at least 2-3 peers for mesh resilience
+      initialTtl: 3,
     },
   
     reliability: {
       ack: {
-        defaultTimeoutMs: 5000,
-        maxPendingAcks: 32,
+        // BLE ACKs can be slow; give more time before timeout
+        defaultTimeoutMs: 10000,
+        maxPendingAcks: 100,
       },
       retry: {
-        maxRetries: 1,
-        initialDelayMs: 2000,
-        maxDelayMs: 5000,
-        backoffMultiplier: 1.5,
-        outboxMaxLifetimeMs: 60000,
+        // BLE is unreliable; allow multiple retries with exponential backoff
+        maxRetries: 5,
+        initialDelayMs: 1000,
+        maxDelayMs: 30000,
+        backoffMultiplier: 2.0,
+        outboxMaxLifetimeMs: 120000,
       },
       dedup: {
-        maxTrackedMessages: 1000,
-        retentionTimeSecs: 600,
+        maxTrackedMessages: 2000,
+        retentionTimeSecs: 3600,
       },
     },
   
     path: {
-      forwardToTopK: 1,
-      maxCongestionLevel: 0.5,
+      // Forward to multiple peers to improve delivery chances on unreliable BLE
+      forwardToTopK: 2,
+      maxCongestionLevel: 0.8,
     },
   } as any);
 
