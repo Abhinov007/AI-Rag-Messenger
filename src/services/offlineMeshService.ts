@@ -35,6 +35,13 @@ type OfflineMeshStatus =
 
 type MeshEventPayload = Record<string, unknown>;
 
+type OfflineMeshEventEmitter = {
+  on: (
+    eventName: string,
+    handler: (event: MeshEventPayload) => void | Promise<void>,
+  ) => void;
+};
+
 let protocol: OfflineProtocolInstance | null = null;
 let currentUserId: string | null = null;
 let status: OfflineMeshStatus = 'stopped';
@@ -49,6 +56,8 @@ let incomingMessageHandler:
 const processedIncomingEventKeys = new Set<string>();
 const discoveredPeerIds = new Set<string>();
 const peerChangeListeners = new Set<() => void>();
+
+let receivePollTimer: ReturnType<typeof setInterval> | null = null;
 
 function notifyPeerChangeListeners() {
   for (const listener of peerChangeListeners) {
@@ -103,12 +112,19 @@ export async function waitForOfflineMeshPeer(
 }
 
 export function setOfflineMeshIncomingMessageHandler(
-  handler: (
-    payload: IncomingOfflineChatPayload,
-    rawEvent: MeshEventPayload,
-  ) => Promise<void>,
+  handler:
+    | ((
+        payload: IncomingOfflineChatPayload,
+        rawEvent: MeshEventPayload,
+      ) => Promise<void>)
+    | null,
 ) {
-  console.log('Offline mesh incoming message handler registered');
+  if (handler) {
+    console.log('Offline mesh incoming message handler registered');
+  } else {
+    console.log('Offline mesh incoming message handler cleared');
+  }
+
   incomingMessageHandler = handler;
 }
 
@@ -126,6 +142,17 @@ function getEventNumber(
 ): number | null {
   const value = event[key];
   return typeof value === 'number' ? value : null;
+}
+
+function getPeerIdFromEvent(event: MeshEventPayload): string | null {
+  return (
+    getEventString(event, 'peer_id') ??
+    getEventString(event, 'peerId') ??
+    getEventString(event, 'peer') ??
+    getEventString(event, 'id') ??
+    getEventString(event, 'userId') ??
+    null
+  );
 }
 
 function getIncomingEventDedupeKey(
@@ -281,45 +308,195 @@ async function ensureBluetoothReady(mesh: OfflineProtocolInstance) {
   }
 }
 
-function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
+function getEventBoolean(
+  event: MeshEventPayload,
+  key: string,
+): boolean | null {
+  const value = event[key];
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return null;
+}
+
+function stopOfflineReceivePolling() {
+  if (receivePollTimer) {
+    clearInterval(receivePollTimer);
+    receivePollTimer = null;
+  }
+}
+
+function startOfflineReceivePolling(mesh: OfflineProtocolInstance) {
+  stopOfflineReceivePolling();
+
   const meshAny = mesh as unknown as {
-    on: (
-      eventName: string,
-      handler: (event: MeshEventPayload) => void | Promise<void>,
-    ) => void;
+    receiveMessage?: () => Promise<MeshEventPayload | null>;
   };
 
-  meshAny.on('all', event => {
-    console.log('[OFFLINE EVENT ALL]', {
-      type: event?.type,
-      event,
+  if (!meshAny.receiveMessage) {
+    console.log('[OFFLINE RECEIVE POLL SKIPPED] receiveMessage not available');
+    return;
+  }
+
+  receivePollTimer = setInterval(() => {
+    void (async () => {
+      try {
+        const event = await meshAny.receiveMessage?.();
+
+        if (!event) {
+          return;
+        }
+
+        console.log('[OFFLINE RECEIVE POLL HIT]', event);
+
+        await handlePossibleIncomingMessage('receiveMessage_poll', event);
+      } catch (error) {
+        console.warn('[OFFLINE RECEIVE POLL FAILED]', error);
+      }
+    })();
+  }, 1000);
+
+  console.log('[OFFLINE RECEIVE POLL STARTED]');
+}
+
+async function runOfflinePostStartDiagnostics(mesh: OfflineProtocolInstance) {
+  const meshAny = mesh as unknown as {
+    forceTransport?: (type: 'ble' | 'internet' | 'wifiDirect') => Promise<void>;
+    getActiveTransports?: () => Promise<string[]>;
+    getBLePeerCount?: () => Promise<number>;
+    getBLEPeerCount?: () => Promise<number>;
+    getState?: () => Promise<unknown>;
+  };
+
+  try {
+    if (meshAny.forceTransport) {
+      await meshAny.forceTransport('ble');
+      console.log('[OFFLINE BLE FORCED]');
+    }
+
+    if (meshAny.getActiveTransports) {
+      const activeTransports = await meshAny.getActiveTransports();
+      console.log('[OFFLINE ACTIVE TRANSPORTS]', activeTransports);
+    }
+
+    if (meshAny.getBLePeerCount) {
+      const blePeerCount = await meshAny.getBLePeerCount();
+      console.log('[OFFLINE BLE PEER COUNT]', blePeerCount);
+    } else if (meshAny.getBLEPeerCount) {
+      const blePeerCount = await meshAny.getBLEPeerCount();
+      console.log('[OFFLINE BLE PEER COUNT]', blePeerCount);
+    }
+
+    if (meshAny.getState) {
+      const protocolState = await meshAny.getState();
+      console.log('[OFFLINE PROTOCOL STATE]', protocolState);
+    }
+  } catch (error) {
+    console.warn('[OFFLINE POST START DIAGNOSTICS FAILED]', error);
+  }
+}
+
+async function logOfflineMeshSendDiagnostics(label: string) {
+  if (!protocol) {
+    console.log('[OFFLINE SEND DIAGNOSTICS SKIPPED] protocol missing', {
+      label,
     });
-  });
+    return;
+  }
+
+  const meshAny = protocol as unknown as {
+    getPendingAckCount?: () => Promise<number>;
+    getRetryQueueSize?: () => Promise<number>;
+    getDeliverySuccessRate?: () => Promise<number>;
+    getTransportMetrics?: (type: 'ble' | 'internet' | 'wifiDirect') => Promise<unknown>;
+    getActiveTransports?: () => Promise<string[]>;
+    getBLePeerCount?: () => Promise<number>;
+    getBLEPeerCount?: () => Promise<number>;
+  };
+
+  try {
+    const blePeerCountPromise = meshAny.getBLePeerCount
+      ? meshAny.getBLePeerCount().catch(() => null)
+      : meshAny.getBLEPeerCount
+        ? meshAny.getBLEPeerCount().catch(() => null)
+        : Promise.resolve(null);
+
+    const [
+      pendingAckCount,
+      retryQueueSize,
+      deliverySuccessRate,
+      bleMetrics,
+      activeTransports,
+      blePeerCount,
+    ] = await Promise.all([
+      meshAny.getPendingAckCount?.().catch(() => null),
+      meshAny.getRetryQueueSize?.().catch(() => null),
+      meshAny.getDeliverySuccessRate?.().catch(() => null),
+      meshAny.getTransportMetrics?.('ble').catch(() => null),
+      meshAny.getActiveTransports?.().catch(() => null),
+      blePeerCountPromise,
+    ]);
+
+    console.log('[OFFLINE SEND DIAGNOSTICS]', {
+      label,
+      pendingAckCount,
+      retryQueueSize,
+      deliverySuccessRate,
+      bleMetrics,
+      activeTransports,
+      blePeerCount,
+      knownPeers: Array.from(discoveredPeerIds),
+    });
+  } catch (error) {
+    console.warn('[OFFLINE SEND DIAGNOSTICS FAILED]', {
+      label,
+      error,
+    });
+  }
+}
+
+function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
+  const meshAny = mesh as unknown as {
+    on?: (eventName: string, listener: (event: MeshEventPayload) => void) => void;
+  };
+
+  if (!meshAny.on) {
+    console.warn('[OFFLINE EVENTS] protocol.on is not available');
+    return;
+  }
 
   meshAny.on('neighbor_discovered', event => {
-    const peerId = getEventString(event, 'peer_id');
+    const peerId = getPeerIdFromEvent(event);
 
-    if (peerId) {
-      discoveredPeerIds.add(peerId);
-      notifyPeerChangeListeners();
+    if (!peerId) {
+      console.warn('[OFFLINE PEER FOUND WITHOUT ID]', event);
+      return;
     }
+
+    discoveredPeerIds.add(peerId);
+    notifyPeerChangeListeners();
 
     console.log('[OFFLINE PEER FOUND]', {
       peerId,
-      knownPeers: Array.from(discoveredPeerIds),
       transport: getEventString(event, 'transport'),
       rssi: getEventNumber(event, 'rssi'),
+      knownPeers: Array.from(discoveredPeerIds),
       raw: event,
     });
   });
 
   meshAny.on('neighbor_lost', event => {
-    const peerId = getEventString(event, 'peer_id');
+    const peerId = getPeerIdFromEvent(event);
 
-    if (peerId) {
-      discoveredPeerIds.delete(peerId);
-      notifyPeerChangeListeners();
+    if (!peerId) {
+      console.warn('[OFFLINE PEER LOST WITHOUT ID]', event);
+      return;
     }
+
+    discoveredPeerIds.delete(peerId);
+    notifyPeerChangeListeners();
 
     console.log('[OFFLINE PEER LOST]', {
       peerId,
@@ -333,6 +510,8 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
       messageId: getEventString(event, 'message_id'),
       sender: getEventString(event, 'sender'),
       recipient: getEventString(event, 'recipient'),
+      priority: getEventString(event, 'priority'),
+      requiresAck: getEventBoolean(event, 'requires_ack'),
       raw: event,
     });
   });
@@ -348,11 +527,10 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   });
 
   meshAny.on('message_failed', event => {
-    console.warn('[OFFLINE MESSAGE FAILED EVENT]', {
+    console.warn('[OFFLINE MESSAGE FAILED]', {
       messageId: getEventString(event, 'message_id'),
       reason: getEventString(event, 'reason'),
       retryCount: getEventNumber(event, 'retry_count'),
-      recipient: getEventString(event, 'recipient'),
       raw: event,
     });
   });
@@ -368,38 +546,7 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
   });
 
   meshAny.on('message_received', event => {
-    void handlePossibleIncomingMessage('message_received', event);
-  });
-
-  meshAny.on('group_message_received', event => {
-    void handlePossibleIncomingMessage('group_message_received', event);
-  });
-
-  /*
-   * Extra defensive listeners while debugging.
-   */
-  meshAny.on('messageReceived', event => {
-    void handlePossibleIncomingMessage('messageReceived', event);
-  });
-
-  meshAny.on('MessageReceived', event => {
-    void handlePossibleIncomingMessage('MessageReceived', event);
-  });
-
-  meshAny.on('data_received', event => {
-    void handlePossibleIncomingMessage('data_received', event);
-  });
-
-  meshAny.on('dataReceived', event => {
-    void handlePossibleIncomingMessage('dataReceived', event);
-  });
-
-  meshAny.on('payload_received', event => {
-    void handlePossibleIncomingMessage('payload_received', event);
-  });
-
-  meshAny.on('payloadReceived', event => {
-    void handlePossibleIncomingMessage('payloadReceived', event);
+    void handlePossibleIncomingMessage('message_received_event', event);
   });
 
   meshAny.on('transport_switched', event => {
@@ -407,6 +554,47 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
       from: getEventString(event, 'from'),
       to: getEventString(event, 'to'),
       reason: getEventString(event, 'reason'),
+      raw: event,
+    });
+  });
+
+  meshAny.on('network_metrics', event => {
+    console.log('[OFFLINE NETWORK METRICS]', {
+      neighborCount: getEventNumber(event, 'neighbor_count'),
+      relayCount: getEventNumber(event, 'relay_count'),
+      deliveryRatio: getEventNumber(event, 'delivery_ratio'),
+      avgLatencyMs: getEventNumber(event, 'avg_latency_ms'),
+      raw: event,
+    });
+  });
+
+  meshAny.on('dors_transport_selected', event => {
+    console.log('[OFFLINE DORS TRANSPORT SELECTED]', {
+      from: getEventString(event, 'from'),
+      transport: getEventString(event, 'transport'),
+      reasonCode: getEventString(event, 'reason_code'),
+      score: getEventNumber(event, 'score'),
+      raw: event,
+    });
+  });
+
+  meshAny.on('dors_transport_switched', event => {
+    console.log('[OFFLINE DORS TRANSPORT SWITCHED]', {
+      from: getEventString(event, 'from'),
+      to: getEventString(event, 'to'),
+      reasonCode: getEventString(event, 'reason_code'),
+      reasonDetail: getEventString(event, 'reason_detail'),
+      raw: event,
+    });
+  });
+
+  meshAny.on('dors_escalation_triggered', event => {
+    console.log('[OFFLINE DORS ESCALATION TRIGGERED]', {
+      phase: getEventString(event, 'phase'),
+      from: getEventString(event, 'from'),
+      to: getEventString(event, 'to'),
+      reasonCode: getEventString(event, 'reason_code'),
+      reasonDetail: getEventString(event, 'reason_detail'),
       raw: event,
     });
   });
@@ -423,6 +611,9 @@ function registerOfflineMeshEvents(mesh: OfflineProtocolInstance) {
 
 export async function startOfflineMesh(clerkUserId: string): Promise<void> {
   if (protocol && currentUserId === clerkUserId && status === 'running') {
+    console.log('[OFFLINE MESH START SKIPPED] already running', {
+      clerkUserId,
+    });
     return;
   }
 
@@ -446,7 +637,7 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
   protocol = new OfflineProtocol({
     appId: 'airag-messenger',
     userId: clerkUserId,
-
+  
     transports: {
       ble: {
         enabled: true,
@@ -458,46 +649,50 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
         enabled: false,
       },
     },
-
+  
     encryption: {
       enabled: false,
       autoKeyExchange: false,
       storePending: false,
       requireEncryption: false,
       pendingQueue: {
-        maxPendingPerPeer: 64,
-        maxPendingGlobal: 4096,
-        pendingTtlMs: 120000,
+        maxPendingPerPeer: 8,
+        maxPendingGlobal: 32,
+        pendingTtlMs: 30000,
         overflowPolicy: 'drop_oldest',
       },
     },
-
+  
     relay: {
-      allowRelay: true,
-      minBatteryForRelay: 30,
-      relayPriority: 'auto',
+      allowRelay: false,
+      relayPriority: 'never',
     },
-
+  
     network: {
-      initialTtl: 8,
+      initialTtl: 1,
     },
-
+  
     reliability: {
       ack: {
-        defaultTimeoutMs: 15000,
-        maxPendingAcks: 1000,
+        defaultTimeoutMs: 5000,
+        maxPendingAcks: 32,
       },
       retry: {
-        maxRetries: 3,
-        initialDelayMs: 3000,
-        maxDelayMs: 30000,
-        backoffMultiplier: 2,
-        outboxMaxLifetimeMs: 3600000,
+        maxRetries: 1,
+        initialDelayMs: 2000,
+        maxDelayMs: 5000,
+        backoffMultiplier: 1.5,
+        outboxMaxLifetimeMs: 60000,
       },
       dedup: {
-        maxTrackedMessages: 10000,
-        retentionTimeSecs: 3600,
+        maxTrackedMessages: 1000,
+        retentionTimeSecs: 600,
       },
+    },
+  
+    path: {
+      forwardToTopK: 1,
+      maxCongestionLevel: 0.5,
     },
   } as any);
 
@@ -508,25 +703,34 @@ export async function startOfflineMesh(clerkUserId: string): Promise<void> {
     await protocol.start();
     status = 'running';
 
+    startOfflineReceivePolling(protocol);
+    await runOfflinePostStartDiagnostics(protocol);
+
     console.log('Offline Mesh core started. Waiting for BLE peer discovery:', {
       clerkUserId,
     });
   } catch (error) {
+    stopOfflineReceivePolling();
     status = 'error';
     protocol = null;
     currentUserId = null;
+    discoveredPeerIds.clear();
+    notifyPeerChangeListeners();
 
     throw error;
   }
 }
 
 export async function stopOfflineMesh(): Promise<void> {
+  stopOfflineReceivePolling();
+
   const mesh = protocol;
 
   protocol = null;
   currentUserId = null;
   status = 'stopped';
   discoveredPeerIds.clear();
+  processedIncomingEventKeys.clear();
   notifyPeerChangeListeners();
 
   if (!mesh) {
@@ -580,17 +784,21 @@ export async function sendOfflineDebugPing(
   }
 
   if (!discoveredPeerIds.has(recipientClerkUserId)) {
-    console.warn('[OFFLINE DEBUG PING WARNING] recipient not discovered yet', {
+    console.warn('[OFFLINE DEBUG PING BLOCKED] recipient not discovered yet', {
       recipientClerkUserId,
       knownPeers: Array.from(discoveredPeerIds),
     });
+
+    throw new Error(
+      `Recipient ${recipientClerkUserId} is not discovered over BLE yet.`,
+    );
   }
 
   const content = JSON.stringify({
     type: 'airag.debug.ping.v1',
     body: 'ping',
     createdAt: new Date().toISOString(),
-  });
+  } satisfies OfflineDebugPingPayload);
 
   console.log('[OFFLINE DEBUG PING BEFORE protocol.sendMessage]', {
     recipientClerkUserId,
@@ -611,7 +819,61 @@ export async function sendOfflineDebugPing(
 
   const messageId = await Promise.race([sendPromise, timeoutPromise]);
 
+  await logOfflineMeshSendDiagnostics('after_debug_ping_send');
+
   console.log('[OFFLINE DEBUG PING QUEUED]', {
+    messageId,
+    recipientClerkUserId,
+  });
+
+  return String(messageId);
+}
+
+export async function sendOfflinePlainTextPing(
+  recipientClerkUserId: string,
+): Promise<string> {
+  console.log('[OFFLINE PLAIN PING START]', {
+    status,
+    hasProtocol: Boolean(protocol),
+    recipientClerkUserId,
+    knownPeers: Array.from(discoveredPeerIds),
+  });
+
+  if (!protocol) {
+    throw new Error('Offline protocol is null');
+  }
+
+  if (status !== 'running') {
+    throw new Error(`Offline protocol is not running. Current status: ${status}`);
+  }
+
+  if (!discoveredPeerIds.has(recipientClerkUserId)) {
+    console.warn('[OFFLINE PLAIN PING BLOCKED] recipient not discovered yet', {
+      recipientClerkUserId,
+      knownPeers: Array.from(discoveredPeerIds),
+    });
+
+    throw new Error(
+      `Recipient ${recipientClerkUserId} is not discovered over BLE yet.`,
+    );
+  }
+
+  const content = 'ping';
+
+  console.log('[OFFLINE PLAIN PING BEFORE protocol.sendMessage]', {
+    recipientClerkUserId,
+    content,
+  });
+
+  const messageId = await protocol.sendMessage({
+    recipient: recipientClerkUserId,
+    content,
+    priority: MessagePriority.Low,
+  });
+
+  await logOfflineMeshSendDiagnostics('after_plain_ping_send');
+
+  console.log('[OFFLINE PLAIN PING QUEUED]', {
     messageId,
     recipientClerkUserId,
   });
@@ -668,10 +930,14 @@ export async function sendOfflineChatMessage(input: {
   }
 
   if (!discoveredPeerIds.has(recipientClerkUserId)) {
-    console.warn('[OFFLINE SERVICE WARNING] recipient not discovered yet', {
+    console.warn('[OFFLINE SERVICE BLOCKED] recipient not discovered yet', {
       recipientClerkUserId,
       knownPeers: Array.from(discoveredPeerIds),
     });
+
+    throw new Error(
+      `Recipient ${recipientClerkUserId} is not discovered over BLE yet.`,
+    );
   }
 
   const payload: IncomingOfflineChatPayload = {
@@ -704,11 +970,17 @@ export async function sendOfflineChatMessage(input: {
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
-      reject(new Error(`chat sendMessage timed out after 10 seconds for recipient ${recipientClerkUserId}`));
+      reject(
+        new Error(
+          `chat sendMessage timed out after 10 seconds for recipient ${recipientClerkUserId}`,
+        ),
+      );
     }, 10000);
   });
 
   const messageId = await Promise.race([sendPromise, timeoutPromise]);
+
+  await logOfflineMeshSendDiagnostics('after_chat_message_send');
 
   console.log('[OFFLINE SERVICE AFTER protocol.sendMessage]', {
     localMessageId,
@@ -718,3 +990,4 @@ export async function sendOfflineChatMessage(input: {
 
   return String(messageId);
 }
+

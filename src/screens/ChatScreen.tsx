@@ -80,6 +80,9 @@ import {
   getOfflineMeshKnownPeers,
 } from '../services/offlineMeshService';
 
+import {
+  sendOfflinePlainTextPing,
+} from '../services/offlineMeshService';
 
 
 type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
@@ -370,6 +373,28 @@ export default function ChatScreen({ navigation, route }: Props) {
       if (options?.showIndicator) {
         setIsSyncing(false);
       }
+    }
+  }
+
+  async function handleOfflineDebugPing() {
+    if (!contactClerkUserId) {
+      console.warn('[DEBUG PING BLOCKED] missing contact clerk user id');
+      return;
+    }
+  
+    try {
+      console.log('[DEBUG PING BUTTON PRESSED]', {
+        recipient: contactClerkUserId,
+      });
+  
+      const meshMessageId = await sendOfflinePlainTextPing(contactClerkUserId);
+  
+      console.log('[DEBUG PING SUCCESS]', {
+        meshMessageId,
+        recipient: contactClerkUserId,
+      });
+    } catch (error) {
+      console.error('[DEBUG PING FAILED]', error);
     }
   }
 
@@ -1190,6 +1215,34 @@ export default function ChatScreen({ navigation, route }: Props) {
             <Text style={styles.condenseErrorText}>{condenseError}</Text>
           </View>
         )}
+
+{contactClerkUserId ? (
+  <Pressable
+  onPress={() => {
+    console.log('[PING BUTTON RAW TAP]');
+    Alert.alert('Ping button tapped');
+    handleOfflineDebugPing();
+  }}
+    style={{
+      marginHorizontal: 12,
+      marginBottom: 8,
+      paddingVertical: 10,
+      borderRadius: 10,
+      backgroundColor: '#1D4ED8',
+      alignItems: 'center',
+    }}
+  >
+    <Text
+      style={{
+        color: '#FFFFFF',
+        fontWeight: '700',
+      }}
+    >
+      Send Mesh Ping
+    </Text>
+  </Pressable>
+) : null}
+
 
         <View
           style={[
