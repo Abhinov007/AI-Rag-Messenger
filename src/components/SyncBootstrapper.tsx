@@ -67,20 +67,36 @@ export default function SyncBootstrapper() {
    * Sets up the handler for incoming offline mesh protocol messages.
    * This handler processes peer-to-peer messages received via Bluetooth Low Energy.
    */
-  useEffect(() => {
-    setOfflineMeshIncomingMessageHandler(async payload => {
-      console.log('Incoming offline message payload:', payload);
+useEffect(() => {
+  setOfflineMeshIncomingMessageHandler(async payload => {
+    console.log('Incoming offline message payload:', payload);
 
-      try {
-        await handleIncomingOfflineMessage(payload);
-      } catch (error) {
-        console.warn(
-          'Failed to save incoming offline message:',
-          getErrorMessage(error),
-        );
-      }
-    });
-  }, []);
+    try {
+      const conversationId =
+        typeof payload.conversationId === 'number'
+          ? payload.conversationId
+          : typeof payload.conversationId === 'string' &&
+              Number.isFinite(Number(payload.conversationId))
+            ? Number(payload.conversationId)
+            : undefined;
+
+      await handleIncomingOfflineMessage({
+        clientMessageId: payload.clientMessageId,
+        senderClerkUserId: payload.senderClerkUserId,
+        recipientClerkUserId: payload.recipientClerkUserId,
+        body: payload.body,
+        createdAt: payload.createdAt,
+        conversationId,
+        participantKey: payload.participantKey ?? undefined,
+      });
+    } catch (error) {
+      console.warn(
+        'Failed to save incoming offline message:',
+        getErrorMessage(error),
+      );
+    }
+  });
+}, []);
 
   /**
    * Manages Offline Protocol Mesh (BLE) lifecycle based on authentication state.

@@ -852,7 +852,7 @@ export default function ChatScreen({ navigation, route }: Props) {
               senderClerkUserId: userId,
               localMessageId: messageId,
               conversationId,
-              participantKey,
+              participantKey: participantKey ?? undefined,
               body: text,
             });
 
