@@ -6,6 +6,8 @@ const paths = [
   'android/app/.cxx',
   'android/app/build',
   'android/build',
+  'android/.gradle',
+  path.join('android', 'build', 'generated', 'autolinking'),
   path.join(
     'node_modules',
     '@offline-protocol',
