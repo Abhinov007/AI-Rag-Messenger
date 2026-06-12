@@ -67,21 +67,14 @@ import { deleteMessageForCurrentUser } from '../db/messageRepository';
 import { clearMessageSyncError } from '../db/messageRepository';
 import { subscribeToOfflineMessageSaved } from '../services/offlineMessageEvents';
 import {
-
-  waitForOfflineMeshPeer,
-} from '../services/offlineMeshService';
-
-
-import {
   sendOfflineChatMessage,
-  sendOfflineDebugPing,
-  hasOfflineMeshPeer,
-  subscribeOfflineMeshPeers,
-  getOfflineMeshKnownPeers,
-} from '../services/offlineMeshService';
-
-import {
   sendOfflinePlainTextPing,
+  hasOfflineMeshPeer,
+  hasOfflineMeshPeerReady,
+  subscribeOfflineMeshPeers,
+  subscribeOfflineMeshPeerReady,
+  getOfflineMeshKnownPeers,
+  getOfflineMeshReadyPeers,
 } from '../services/offlineMeshService';
 
 
@@ -123,6 +116,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     null,
   );
   const [isOfflinePeerNearby, setIsOfflinePeerNearby] = useState(false);
+  const [isOfflinePeerReady, setIsOfflinePeerReady] = useState(false);
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const subscriptionKeyRef = useRef<string | null>(null);
@@ -264,23 +258,34 @@ export default function ChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!contactClerkUserId) {
       setIsOfflinePeerNearby(false);
+      setIsOfflinePeerReady(false);
       return;
     }
 
     const refreshPeerStatus = () => {
       const isNearby = hasOfflineMeshPeer(contactClerkUserId!);
-      console.log('[MESH PEER CHECK]', { contactClerkUserId, isNearby, knownPeers: getOfflineMeshKnownPeers() });
+      const isReady = hasOfflineMeshPeerReady(contactClerkUserId!);
+      console.log('[MESH PEER CHECK]', {
+        contactClerkUserId,
+        isNearby,
+        isReady,
+        knownPeers: getOfflineMeshKnownPeers(),
+        readyPeers: getOfflineMeshReadyPeers(),
+      });
       setIsOfflinePeerNearby(isNearby);
+      setIsOfflinePeerReady(isReady);
     };
 
     refreshPeerStatus();
 
     const interval = setInterval(refreshPeerStatus, 2000);
     const unsubscribePeers = subscribeOfflineMeshPeers(refreshPeerStatus);
+    const unsubscribeReadyPeers = subscribeOfflineMeshPeerReady(refreshPeerStatus);
 
     return () => {
       clearInterval(interval);
       unsubscribePeers();
+      unsubscribeReadyPeers();
     };
   }, [contactClerkUserId]);
 
@@ -415,7 +420,7 @@ export default function ChatScreen({ navigation, route }: Props) {
   
       const meshMessageId = await sendOfflinePlainTextPing(contactClerkUserId);
   
-      console.log('[DEBUG PING SUCCESS]', {
+      console.log('[DEBUG PING DELIVERED]', {
         meshMessageId,
         recipient: contactClerkUserId,
       });
@@ -833,7 +838,8 @@ export default function ChatScreen({ navigation, route }: Props) {
           conversationId,
           participantKey,
           body: text,
-          isOfflinePeerReady: hasOfflineMeshPeer(recipientClerkUserId),
+          isOfflinePeerDiscovered: hasOfflineMeshPeer(recipientClerkUserId),
+          isOfflinePeerReady: hasOfflineMeshPeerReady(recipientClerkUserId),
         });
   
         void (async () => {
@@ -854,12 +860,14 @@ export default function ChatScreen({ navigation, route }: Props) {
               conversationId,
               participantKey: participantKey ?? undefined,
               body: text,
+              waitForDelivery: true,
+              deliveryTimeoutMs: 60_000,
             });
 
             await markMessageOfflineSynced(messageId);
             await loadThread();
 
-            console.log('[OFFLINE SEND SUCCESS]', {
+            console.log('[OFFLINE SEND DELIVERED]', {
               localMessageId: messageId,
               offlineMeshMessageId,
             });
@@ -1075,7 +1083,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
 
     if (message.offlineSynced) {
-      return 'Sent (Mesh)';
+      return 'Delivered (Mesh)';
     }
 
     return 'Sending...';
@@ -1107,12 +1115,14 @@ export default function ChatScreen({ navigation, route }: Props) {
             <Text
               style={[
                 styles.meshStatusText,
-                isOfflinePeerNearby && styles.meshStatusTextNearby,
+                isOfflinePeerReady && styles.meshStatusTextNearby,
               ]}
             >
-              {isOfflinePeerNearby
-                ? 'Nearby Â· BLE ready'
-                : 'Searching for nearby device...'}
+              {isOfflinePeerReady
+                ? 'Nearby · Link ready'
+                : isOfflinePeerNearby
+                  ? 'Nearby · Connecting...'
+                  : 'Searching for nearby device...'}
             </Text>
           ) : null}
         </View>
