@@ -38,4 +38,10 @@ expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
 
+include ':mesh-sdk'
+project(':mesh-sdk').projectDir = new File(
+  rootProject.projectDir,
+  '../node_modules/@offline-protocol/mesh-sdk/android',
+)
+
 includeBuild(expoAutolinking.reactNativeGradlePlugin)
