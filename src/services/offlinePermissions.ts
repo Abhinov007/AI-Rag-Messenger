@@ -21,9 +21,22 @@ export async function requestOfflineMeshPermissions(): Promise<boolean> {
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       ];
 
+      if (androidVersion >= 33) {
+        requiredPermissions.push(
+          PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES,
+        );
+      }
+
       const result = await PermissionsAndroid.requestMultiple(requiredPermissions);
 
-      const bluetoothAndLocationGranted = requiredPermissions.every(
+      const corePermissions = [
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      ];
+
+      const bluetoothAndLocationGranted = corePermissions.every(
         permission => result[permission] === PermissionsAndroid.RESULTS.GRANTED,
       );
 
