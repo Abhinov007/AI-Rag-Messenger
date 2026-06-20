@@ -18,6 +18,12 @@ type GetClerkToken = () => Promise<string | null>;
 let sharedSupabaseClient: SupabaseClient | null = null;
 let sharedGetClerkToken: GetClerkToken | undefined;
 
+/**
+ * Creates or returns a shared Supabase client instance.
+ * Uses Clerk tokens for authentication when provided.
+ * @param getClerkToken - Optional function to get the Clerk authentication token
+ * @returns The Supabase client, or null if Supabase is not configured
+ */
 export function createSupabaseClient(getClerkToken?: GetClerkToken) {
   if (!isSupabaseConfigured) {
     return null;
@@ -50,6 +56,10 @@ export function createSupabaseClient(getClerkToken?: GetClerkToken) {
   return sharedSupabaseClient;
 }
 
+/**
+ * Resets the shared Supabase client state to force recreation on next call.
+ * Clears cached Clerk token getter function.
+ */
 export function resetSupabaseClientState() {
   sharedGetClerkToken = undefined;
 }

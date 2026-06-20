@@ -11,6 +11,7 @@ AIRagMessenger is a native Expo/React Native app. Because it uses native modules
 - Android Studio / Android SDK for Android builds, or Xcode for iOS builds
 - A [Clerk](https://clerk.com/) application
 - A [Supabase](https://supabase.com/) project
+- A physical device or simulator supporting Bluetooth (BLE) for testing the offline mesh networking
 - Optional: [EAS CLI](https://docs.expo.dev/build/introduction/) for cloud builds
 - Optional: [Ollama](https://ollama.com/) only if you want to run the standalone `backend/` service
 
@@ -34,13 +35,11 @@ npm install
 1. Create a Supabase project.
 2. Open the Supabase SQL Editor.
 3. Run `supabase.messages.sql` from the repository root.
-4. Apply the RAG search migration expected by the app:
-   - `messages.search_vector`
-   - `messages_search_vector_idx`
-   - `messages_conversation_remote_id_idx`
-   - `search_conversation_messages(...)`
-
-Note: `supabase/migrations/20260601_add_rag_message_search.sql` currently lists the expected RAG artifacts rather than a complete SQL migration body. Before setting up a fresh Supabase project, replace it with the full SQL that creates the search vector, indexes, any trigger/backfill logic, and the `search_conversation_messages` RPC.
+4. Apply the RAG search migration from `supabase/migrations/20260601_add_rag_message_search.sql` to setup the full-text search index and the custom Postgres function. This creates:
+   - `messages.search_vector` (Generated column)
+   - `messages_search_vector_idx` (GIN index)
+   - `messages_conversation_remote_id_idx` (B-Tree index)
+   - `search_conversation_messages(...)` (RPC search function)
 
 The current `supabase.messages.sql` enables RLS but uses open development policies. Tighten these policies before production.
 
@@ -160,6 +159,26 @@ Available backend routes:
 - `POST /ai/summarize`
 - `POST /ai/suggest-reply`
 
+## 8. Offline Mesh Setup & Permissions
+
+The offline mesh networking runs automatically when the user signs in. It utilizes Bluetooth Low Energy (BLE) and Wi-Fi Direct to build a local peer-to-peer mesh.
+
+### Permission Requirements
+
+Because P2P communication scans for nearby devices and connects to them, Android and iOS require the following permissions:
+
+- **Android 12+ (API 31+):**
+  - `BLUETOOTH_SCAN`
+  - `BLUETOOTH_ADVERTISE`
+  - `BLUETOOTH_CONNECT`
+  - `ACCESS_FINE_LOCATION`
+- **Android 13+ (API 33+):**
+  - All of the above plus `NEARBY_WIFI_DEVICES` (for Wi-Fi Direct transport)
+- **iOS:**
+  - Standard Bluetooth permissions (handled natively by Expo/iOS client)
+
+The permission prompt is requested automatically by `requestOfflineMeshPermissions()` when the app launches and starts the mesh protocol.
+
 ## Troubleshooting
 
 - **Missing Clerk key:** Ensure `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` is set in the root `.env`.
@@ -167,4 +186,5 @@ Available backend routes:
 - **RAG search fails:** Confirm the `search_conversation_messages` RPC and `messages.search_vector` artifacts exist in Supabase.
 - **Expo Go does not work:** Use `npm run android`, `npm run ios`, or an EAS/dev-client build because the app depends on native modules.
 - **Local AI says model is missing:** Open **Settings -> Local AI** and download the model.
+- **Offline Mesh connection fails:** Ensure Bluetooth is turned on, location services are enabled (required for BLE scanning on Android), and permissions were granted. Check console logs for `[PEER FOUND]` or `[OFFLINE DIAGNOSTIC]` messages.
 - **SQLite schema issues:** Clear app data during development after schema changes, or update `src/db/migrations.ts` carefully.

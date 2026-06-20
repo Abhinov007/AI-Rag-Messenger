@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Single-conversation thread: loads messages from SQLite, supports sending,
  * pulls remote messages, subscribes to realtime Supabase inserts,
  * supports pull-to-refresh, retries sync, shows message sync status,
@@ -7,7 +7,7 @@
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '@clerk/expo';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -48,11 +48,12 @@ import {
   type RagAnswerResult,
 } from '../ai/localLlamaAssistant';
 
-import { getConversationById } from '../db/conversationRepository';
+import { getConversationById, debugConversationOwners } from '../db/conversationRepository';
 import {
   addMessage,
-  deleteMessageForCurrentUser,
   getMessagePageByConversationId,
+  markMessageSyncFailed,
+  markMessageOfflineSynced,
 } from '../db/messageRepository';
 import type { AppStackParamList } from '../navigation/types';
 import { pullRemoteMessagesForConversation } from '../services/messagePull';
@@ -61,7 +62,19 @@ import { syncMessageById, syncPendingMessages } from '../services/messageSync';
 import type { Message } from '../types/message';
 import { formatMessageTime } from '../utils/date';
 import { searchConversationMessages } from '../services/ragSearch';
+import { deleteMessageForCurrentUser } from '../db/messageRepository';
 
+import { clearMessageSyncError } from '../db/messageRepository';
+import { subscribeToOfflineMessageSaved } from '../services/offlineMessageEvents';
+import {
+  sendOfflineChatMessage,
+  hasOfflineMeshPeer,
+  hasOfflineMeshPeerReady,
+  subscribeOfflineMeshPeers,
+  subscribeOfflineMeshPeerReady,
+  getOfflineMeshKnownPeers,
+  getOfflineMeshReadyPeers,
+} from '../services/offlineMeshService';
 
 
 type Navigation = NativeStackNavigationProp<AppStackParamList, 'Chat'>;
@@ -98,6 +111,11 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [summaryText, setSummaryText] = useState('');
   const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [contactClerkUserId, setContactClerkUserId] = useState<string | null>(
+    null,
+  );
+  const [isOfflinePeerNearby, setIsOfflinePeerNearby] = useState(false);
+  const [isOfflinePeerReady, setIsOfflinePeerReady] = useState(false);
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const subscriptionKeyRef = useRef<string | null>(null);
@@ -179,44 +197,116 @@ export default function ChatScreen({ navigation, route }: Props) {
     return () => clearTimeout(timer);
   }, [isAiMenuVisible, pendingAskChatOpen]);
 
+  /**
+   * Scrolls the message list to the bottom, optionally with animation.
+   * @param animated - Whether to animate the scroll (default: true)
+   */
   function scrollToBottom(animated = true) {
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToEnd({ animated });
     });
   }
 
+  /**
+   * Retrieves the Supabase authentication token from Clerk.
+   * @returns The Clerk token as a string, or null if unavailable
+   */
   async function getClerkToken(): Promise<string | null> {
     const token = await getTokenRef.current({ template: 'supabase' });
     return typeof token === 'string' ? token : null;
   }
 
+  /**
+   * Loads the conversation and its messages from the local SQLite database.
+   * Sets the conversation title and loads the first page of messages.
+   * @returns The conversation object, or null if not found
+   */
   async function loadThread() {
     const conversation = await getConversationById(
       conversationId,
       userId ?? undefined,
     );
+  
+    if (__DEV__) {
+      await debugConversationOwners();
+    }
 
     if (!conversation) {
       setError('Conversation not found.');
       setMessages([]);
       return null;
     }
-
+  
     setTitle(conversation.title ?? 'Chat');
+    console.log('[CHATSCREEN LOADED CONVERSATION]', { conversationId: conversation.id, contactClerkUserId: conversation.contactClerkUserId });
+    setContactClerkUserId(conversation.contactClerkUserId ?? null);
     setError('');
-
+  
     const page = await getMessagePageByConversationId({
       conversationId,
       currentClerkUserId: userId ?? undefined,
       limit: MESSAGE_PAGE_SIZE,
     });
-
+  
     setMessages(page.messages);
     setHasOlderMessages(page.hasMore);
-
+  
     return conversation;
   }
 
+  useEffect(() => {
+    if (!contactClerkUserId) {
+      setIsOfflinePeerNearby(false);
+      setIsOfflinePeerReady(false);
+      return;
+    }
+
+    const refreshPeerStatus = () => {
+      const isNearby = hasOfflineMeshPeer(contactClerkUserId!);
+      const isReady = hasOfflineMeshPeerReady(contactClerkUserId!);
+      console.log('[MESH PEER CHECK]', {
+        contactClerkUserId,
+        isNearby,
+        isReady,
+        knownPeers: getOfflineMeshKnownPeers(),
+        readyPeers: getOfflineMeshReadyPeers(),
+      });
+      setIsOfflinePeerNearby(isNearby);
+      setIsOfflinePeerReady(isReady);
+    };
+
+    refreshPeerStatus();
+
+    const interval = setInterval(refreshPeerStatus, 2000);
+    const unsubscribePeers = subscribeOfflineMeshPeers(refreshPeerStatus);
+    const unsubscribeReadyPeers = subscribeOfflineMeshPeerReady(refreshPeerStatus);
+
+    return () => {
+      clearInterval(interval);
+      unsubscribePeers();
+      unsubscribeReadyPeers();
+    };
+  }, [contactClerkUserId]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToOfflineMessageSaved(async event => {
+      if (event.localConversationId !== conversationId) {
+        return;
+      }
+  
+      console.log('ChatScreen refreshing after offline message saved:', event);
+  
+      await loadThread();
+      scrollToBottom(true);
+    });
+  
+    return unsubscribe;
+  }, [conversationId, userId]);
+
+  /**
+   * Loads older messages before the earliest message in the current list.
+   * Updates the local message state with the older messages prepended.
+   */
   async function handleLoadOlderMessages() {
     if (isLoadingOlder || !hasOlderMessages || messages.length === 0) {
       return;
@@ -244,6 +334,11 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Syncs pending messages to Supabase and pulls new remote messages.
+   * Optionally displays a loading indicator during the sync.
+   * @param options - Optional configuration for the sync operation
+   */
   async function syncCurrentChat(options?: { showIndicator?: boolean }) {
     if (activeSyncRef.current) {
       return;
@@ -298,6 +393,7 @@ export default function ChatScreen({ navigation, route }: Props) {
     } catch (syncError) {
       console.warn('Current chat sync failed. Will retry later:', syncError);
     } finally {
+      await loadThread();
       activeSyncRef.current = false;
 
       if (options?.showIndicator) {
@@ -306,6 +402,11 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+
+
+  /**
+   * Handles a pull-to-refresh action by reloading local and syncing remote messages.
+   */
   async function handleRefresh() {
     setIsRefreshing(true);
 
@@ -325,6 +426,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Retries sending a failed message to Supabase.
+   * @param message - The message to retry
+   */
   async function handleRetryMessage(message: Message) {
     if (!userId || retryingMessageId === message.id) {
       return;
@@ -343,6 +448,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Deletes a message for the current user with a confirmation dialog.
+   * @param message - The message to delete
+   */
   const handleDeleteMessage = useCallback(
     (message: Message) => {
       Alert.alert(
@@ -492,6 +601,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     };
   }, [conversationId, userId]);
 
+  /**
+   * Resets all message condenser UI state after dismissing or applying condensed text.
+   */
   function resetCondenseComposerState() {
     setIsCondensingMessage(false);
     setIsCondensePreviewVisible(false);
@@ -502,6 +614,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     setAppliedCondensedDraft('');
   }
 
+  /**
+   * Updates the draft text and resets condensing UI when the text changes.
+   * @param text - The new draft text
+   */
   function handleDraftChange(text: string) {
     setDraft(text);
     setCondenseError('');
@@ -511,6 +627,10 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Initiates the message condensation process using local AI model.
+   * Generates a shortened version of the current draft text.
+   */
   async function handleCondenseOutgoingDraft() {
     const originalDraft = draft.trim();
 
@@ -559,11 +679,17 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Dismisses the condense suggestion and marks the draft as not eligible for condensing.
+   */
   function handleDismissCondenseOffer() {
     setCondenseError('');
     setDismissedCondenseDraft(draft.trim());
   }
 
+  /**
+   * Dismisses the condensed preview and reverts to using the original draft.
+   */
   function handleKeepOriginalDraft() {
     Keyboard.dismiss();
     setIsCondensePreviewVisible(false);
@@ -573,6 +699,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     setDismissedCondenseDraft(draft.trim());
   }
 
+  /**
+   * Approves the condensed text and uses it as the new draft message.
+   */
   function handleUseCondensedDraft() {
     const approvedCondensedText = editableCondensedText.trim();
 
@@ -600,41 +729,159 @@ export default function ChatScreen({ navigation, route }: Props) {
     setEditableCondensedText('');
   }
 
+  /**
+   * Sends the current draft message to the conversation.
+   * Saves locally, syncs to Supabase, and sends over offline mesh if a peer is available.
+   */
   async function handleSend() {
+    console.log('[HANDLE SEND CALLED - LATEST CODE]');
+  
     const text = draft.trim();
-
+  
+    console.log('[HANDLE SEND TEXT CHECK]', {
+      text,
+      draft,
+      isSending,
+      isCondensingMessage,
+    });
+  
     if (!text || isSending || isCondensingMessage) {
+      console.log('[HANDLE SEND RETURNED EARLY]', {
+        hasText: Boolean(text),
+        isSending,
+        isCondensingMessage,
+      });
       return;
     }
-
+  
     setIsSending(true);
-
+  
     try {
+      console.log('[CHAT SEND START]', { conversationId, userId, text });
       const messageId = await addMessage(conversationId, 'user', text, userId);
-
-      /*
-       * Only clear the composer after SQLite successfully stores the message.
-       * This prevents losing the user's draft if local saving fails.
-       */
+  
+      console.log('[CHAT SEND LOCAL MESSAGE SAVED]', {
+        messageId,
+        conversationId,
+        userId,
+        body: text,
+      });
+  
       setDraft('');
       resetCondenseComposerState();
-
+  
+      /*
+       * Show local message immediately.
+       * Never block UI on BLE or Supabase.
+       */
       await loadThread();
       scrollToBottom(true);
+  
+      const conversation = await getConversationById(
+        conversationId,
+        userId ?? undefined,
+      );
+  
+      console.log('[CHAT SEND CONVERSATION FETCHED]', conversation);
 
-      if (userId) {
-        try {
-          await syncMessageById(messageId, userId, getClerkToken);
-        } catch (syncError) {
-          console.warn(
-            'Message saved locally but sync failed. Will retry later:',
-            syncError,
-          );
-        }
+      const recipientClerkUserId = conversation?.contactClerkUserId ?? null;
+      const participantKey = conversation?.participantKey ?? null;
+  
+      console.log('[CHATSCREEN BEFORE OFFLINE IF]', {
+        userId,
+        recipientClerkUserId,
+        sameUser: userId === recipientClerkUserId,
+        conversationId,
+        participantKey,
+        conversation,
+      });
+  
+      /*
+       * Offline mesh send.
+       * Debug ping goes first.
+       * Real chat message goes second.
+       */
+      if (
+        userId &&
+        recipientClerkUserId &&
+        recipientClerkUserId !== userId
+      ) {
+        console.log('[MESH BOUNDARY BEFORE SERVICE CALL]', {
+          recipientClerkUserId,
+          senderClerkUserId: userId,
+          localMessageId: messageId,
+          conversationId,
+          participantKey,
+          body: text,
+          isOfflinePeerDiscovered: hasOfflineMeshPeer(recipientClerkUserId),
+          isOfflinePeerReady: hasOfflineMeshPeerReady(recipientClerkUserId),
+        });
+  
+        void (async () => {
+          try {
+            console.log('[OFFLINE CHAT MESSAGE ABOUT TO SEND]', {
+              recipientClerkUserId,
+              senderClerkUserId: userId,
+              localMessageId: messageId,
+              conversationId,
+              participantKey,
+              body: text,
+            });
+
+            const offlineMeshMessageId = await sendOfflineChatMessage({
+              recipientClerkUserId,
+              senderClerkUserId: userId,
+              localMessageId: messageId,
+              conversationId,
+              participantKey: participantKey ?? undefined,
+              body: text,
+              waitForDelivery: true,
+              deliveryTimeoutMs: 60_000,
+            });
+
+            await markMessageOfflineSynced(messageId);
+            await loadThread();
+
+            console.log('[OFFLINE SEND DELIVERED]', {
+              localMessageId: messageId,
+              offlineMeshMessageId,
+            });
+          } catch (offlineError) {
+            console.warn('[OFFLINE SEND FAILED]', offlineError);
+            const errorMsg = offlineError instanceof Error ? offlineError.message : String(offlineError);
+            await markMessageSyncFailed(messageId, `Offline: ${errorMsg}`);
+            await loadThread();
+          }
+        })();
+      } else {
+        console.warn('[OFFLINE SEND SKIPPED]', {
+          hasUserId: Boolean(userId),
+          hasRecipientClerkUserId: Boolean(recipientClerkUserId),
+          recipientClerkUserId,
+          sameUser: userId === recipientClerkUserId,
+          conversation,
+        });
       }
-
-      await loadThread();
-      scrollToBottom(true);
+  
+      /*
+       * Supabase sync stays separate.
+       */
+      if (userId) {
+        void (async () => {
+          try {
+            await syncMessageById(messageId, userId, getClerkToken);
+            await loadThread();
+          } catch (syncError) {
+            console.warn(
+              'Message saved locally. Supabase sync failed, keeping it queued:',
+              syncError,
+            );
+  
+            await clearMessageSyncError(messageId);
+            await loadThread();
+          }
+        })();
+      }
     } catch (sendError) {
       console.warn('Failed to send message:', sendError);
       setError('Could not send message.');
@@ -643,6 +890,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Summarizes recent messages in the conversation using local AI model.
+   */
   async function handleSummarizeChat() {
     setIsAiMenuVisible(false);
 
@@ -668,6 +918,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Generates reply suggestions for the recent messages using local AI model.
+   */
   async function handleSuggestReplies() {
     setIsAiMenuVisible(false);
 
@@ -697,6 +950,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
   }
 
+  /**
+   * Opens the RAG (Retrieval-Augmented Generation) ask chat modal.
+   */
   function handleOpenAskChat() {
     if (pendingAskChatOpen || isAskChatVisible) {
       return;
@@ -708,6 +964,9 @@ export default function ChatScreen({ navigation, route }: Props) {
     setIsAiMenuVisible(false);
   }
   
+  /**
+   * Searches conversation messages and generates an answer to a question using RAG.
+   */
   async function handleAskAboutChat() {
     const question = ragQuestion.trim();
   
@@ -770,25 +1029,39 @@ export default function ChatScreen({ navigation, route }: Props) {
     console.log('Ask About Chat submitted:', question);
   }
 
+  /**
+   * Inserts a suggested reply into the draft text and closes the suggestions modal.
+   * @param suggestion - The suggested reply text
+   */
   function handlePickSuggestion(suggestion: string) {
     setDraft(suggestion);
     setIsReplyModalVisible(false);
   }
 
+  /**
+   * Gets the current sync status of a message sent by the current user.
+   * Returns a descriptive status string for UI display.
+   * @param message - The message to check status for
+   * @returns The status text to display
+   */
   function getOwnMessageStatus(message: Message) {
     if (retryingMessageId === message.id) {
       return 'Retrying...';
     }
 
     if (message.syncError) {
-      return 'Failed · Tap to retry';
+      return 'Failed Â· Tap to retry';
     }
 
-    if (!message.synced) {
-      return 'Sending...';
+    if (message.synced) {
+      return 'Sent';
     }
 
-    return 'Sent';
+    if (message.offlineSynced) {
+      return 'Delivered (Mesh)';
+    }
+
+    return 'Sending...';
   }
 
   return (
@@ -811,6 +1084,21 @@ export default function ChatScreen({ navigation, route }: Props) {
 
           {isSyncing ? (
             <Text style={styles.syncingText}>Syncing...</Text>
+          ) : null}
+
+          {contactClerkUserId ? (
+            <Text
+              style={[
+                styles.meshStatusText,
+                isOfflinePeerReady && styles.meshStatusTextNearby,
+              ]}
+            >
+              {isOfflinePeerReady
+                ? 'Nearby · Link ready'
+                : isOfflinePeerNearby
+                  ? 'Nearby · Connecting...'
+                  : 'Searching for nearby device...'}
+            </Text>
           ) : null}
         </View>
 
@@ -868,56 +1156,49 @@ export default function ChatScreen({ navigation, route }: Props) {
                 : null;
 
               return (
-                <Pressable
-                  onLongPress={() => handleDeleteMessage(item)}
-                  delayLongPress={500}
+                <View
+                  style={[
+                    styles.bubbleWrap,
+                    isOwnMessage
+                      ? styles.bubbleWrapUser
+                      : styles.bubbleWrapOther,
+                  ]}
                 >
                   <View
                     style={[
-                      styles.bubbleWrap,
-                      isOwnMessage
-                        ? styles.bubbleWrapUser
-                        : styles.bubbleWrapOther,
+                      styles.bubble,
+                      isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
                     ]}
                   >
-                    <View
-                      style={[
-                        styles.bubble,
-                        isOwnMessage ? styles.bubbleUser : styles.bubbleOther,
-                      ]}
-                    >
-                      <Text style={styles.bubbleMeta}>
-                        {isOwnMessage
-                          ? 'You'
-                          : item.senderType === 'assistant'
-                            ? 'Assistant'
-                            : title}
+                    <Text style={styles.bubbleMeta}>
+                      {isOwnMessage
+                        ? 'You'
+                        : item.senderType === 'assistant'
+                          ? 'Assistant'
+                          : title}
+                    </Text>
+
+                    <Text style={styles.bubbleBody}>{item.body}</Text>
+
+                    <View style={styles.messageFooter}>
+                      <Text style={styles.messageTime}>
+                        {formatMessageTime(item.createdAt)}
                       </Text>
 
-                      <Text style={styles.bubbleBody}>{item.body}</Text>
-
-                      <View style={styles.messageFooter}>
-                        <Text style={styles.messageTime}>
-                          {formatMessageTime(item.createdAt)}
-                        </Text>
-
-                        {statusText ? (
-                          item.syncError ? (
-                            <Pressable onPress={() => handleRetryMessage(item)}>
-                              <Text style={styles.failedStatus}>
-                                {statusText}
-                              </Text>
-                            </Pressable>
-                          ) : (
-                            <Text style={styles.messageStatus}>
+                      {statusText ? (
+                        item.syncError ? (
+                          <Pressable onPress={() => handleRetryMessage(item)}>
+                            <Text style={styles.failedStatus}>
                               {statusText}
                             </Text>
-                          )
-                        ) : null}
-                      </View>
+                          </Pressable>
+                        ) : (
+                          <Text style={styles.messageStatus}>{statusText}</Text>
+                        )
+                      ) : null}
                     </View>
                   </View>
-                </Pressable>
+                </View>
               );
             }}
             ListHeaderComponent={
@@ -1002,6 +1283,9 @@ export default function ChatScreen({ navigation, route }: Props) {
             <Text style={styles.condenseErrorText}>{condenseError}</Text>
           </View>
         )}
+
+
+
 
         <View
           style={[
@@ -1496,6 +1780,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     marginTop: 2,
+  },
+  meshStatusText: {
+    color: '#8AA398',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  meshStatusTextNearby: {
+    color: '#25D366',
   },
   aiBtn: {
     alignItems: 'center',
@@ -2110,3 +2403,6 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   }
 });
+
+
+

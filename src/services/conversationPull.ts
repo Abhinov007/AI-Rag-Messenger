@@ -30,6 +30,13 @@ type RemoteAppUserRow = {
   display_name: string | null;
 };
 
+/**
+ * Pulls remote conversations from Supabase for the current user and saves them locally.
+ * Fetches conversations where the user is either the owner or contact participant.
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws Error if Supabase client is missing or if any conversation fails to save
+ */
 export async function pullRemoteConversations(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
@@ -72,7 +79,7 @@ export async function pullRemoteConversations(
   const participantIds = Array.from(
     new Set(
       conversations
-        .flatMap((conversation) => [
+        .flatMap(conversation => [
           conversation.owner_clerk_user_id,
           conversation.contact_clerk_user_id,
         ])
@@ -91,23 +98,41 @@ export async function pullRemoteConversations(
   });
 
   for (const conversation of conversations) {
-    const title = getTitleForCurrentUser({
+    const localConversation = buildLocalConversationForCurrentUser({
       conversation,
       currentUserId: clerkUserId,
       appUsersByClerkId,
     });
 
+    console.log('Pulled conversation local mapping:', {
+      currentUserId: clerkUserId,
+      remoteId: conversation.id,
+      remoteOwnerClerkUserId: conversation.owner_clerk_user_id,
+      remoteContactClerkUserId: conversation.contact_clerk_user_id,
+      localOwnerClerkUserId: localConversation.ownerClerkUserId,
+      localContactClerkUserId: localConversation.contactClerkUserId,
+      title: localConversation.title,
+      contactEmail: localConversation.contactEmail,
+      participantKey: conversation.participant_key,
+    });
+
     try {
       await upsertPulledConversation({
         remoteId: conversation.id,
-        title,
+        title: localConversation.title,
 
-        ownerClerkUserId: conversation.owner_clerk_user_id,
+        /*
+         * Local meaning:
+         * owner = current logged-in user
+         * contact = the other participant
+         */
+        ownerClerkUserId: localConversation.ownerClerkUserId,
+        contactName: localConversation.contactName,
+        contactEmail: localConversation.contactEmail,
+        contactNormalizedEmail: localConversation.contactNormalizedEmail,
+        contactClerkUserId: localConversation.contactClerkUserId,
 
-        contactName: conversation.contact_name,
-        contactEmail: conversation.contact_email,
-        contactNormalizedEmail: conversation.contact_normalized_email,
-        contactClerkUserId: conversation.contact_clerk_user_id,
+        participantKey: conversation.participant_key,
 
         createdAt: conversation.created_at,
         updatedAt: conversation.updated_at,
@@ -120,6 +145,68 @@ export async function pullRemoteConversations(
   }
 }
 
+/**
+ * Builds a local conversation representation for the current user from a remote conversation.
+ * Determines which user is the owner and which is the contact, and retrieves display information.
+ * @param conversation - The remote conversation data
+ * @param currentUserId - The ID of the current logged-in user
+ * @param appUsersByClerkId - Map of app users indexed by their Clerk IDs
+ * @returns Local conversation object with owner/contact perspective adjusted for current user
+ */
+function buildLocalConversationForCurrentUser({
+  conversation,
+  currentUserId,
+  appUsersByClerkId,
+}: {
+  conversation: RemoteConversationRow;
+  currentUserId: string;
+  appUsersByClerkId: Map<string, RemoteAppUserRow>;
+}) {
+  const isCurrentUserOwner =
+    conversation.owner_clerk_user_id === currentUserId;
+
+  const peerClerkUserId = isCurrentUserOwner
+    ? conversation.contact_clerk_user_id
+    : conversation.owner_clerk_user_id;
+
+  const peerAppUser = appUsersByClerkId.get(peerClerkUserId ?? '');
+
+  const peerDisplayName =
+    getDisplayNameFromAppUser(peerAppUser) ||
+    conversation.contact_name?.trim() ||
+    conversation.title?.trim() ||
+    'New Chat';
+
+  const peerEmail =
+    peerAppUser?.email?.trim() ||
+    (isCurrentUserOwner ? conversation.contact_email?.trim() : null) ||
+    null;
+
+  const peerNormalizedEmail =
+    peerAppUser?.normalized_email?.trim().toLowerCase() ||
+    (isCurrentUserOwner
+      ? conversation.contact_normalized_email?.trim().toLowerCase()
+      : null) ||
+    peerEmail?.trim().toLowerCase() ||
+    null;
+
+  return {
+    title: peerDisplayName,
+    ownerClerkUserId: currentUserId,
+    contactClerkUserId: peerClerkUserId,
+    contactName: peerDisplayName,
+    contactEmail: peerEmail,
+    contactNormalizedEmail: peerNormalizedEmail,
+  };
+}
+
+/**
+ * Fetches app user profiles from Supabase by their Clerk IDs.
+ * @param clerkUserIds - Array of Clerk user IDs to fetch
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @returns Map of app users indexed by Clerk ID
+ * @throws Error if the Supabase query fails
+ */
 async function fetchAppUsersByClerkId(
   clerkUserIds: string[],
   getClerkToken: GetClerkToken,
@@ -149,40 +236,11 @@ async function fetchAppUsersByClerkId(
   return map;
 }
 
-function getTitleForCurrentUser({
-  conversation,
-  currentUserId,
-  appUsersByClerkId,
-}: {
-  conversation: RemoteConversationRow;
-  currentUserId: string;
-  appUsersByClerkId: Map<string, RemoteAppUserRow>;
-}) {
-  const isCurrentUserOwner =
-    conversation.owner_clerk_user_id === currentUserId;
-
-  const peerClerkUserId = isCurrentUserOwner
-    ? conversation.contact_clerk_user_id
-    : conversation.owner_clerk_user_id;
-
-  if (isCurrentUserOwner) {
-    return (
-      conversation.contact_name?.trim() ||
-      getDisplayNameFromAppUser(appUsersByClerkId.get(peerClerkUserId ?? '')) ||
-      conversation.contact_email?.trim() ||
-      conversation.title?.trim() ||
-      'New Chat'
-    );
-  }
-
-  return (
-    getDisplayNameFromAppUser(appUsersByClerkId.get(peerClerkUserId ?? '')) ||
-    conversation.title?.trim() ||
-    conversation.contact_name?.trim() ||
-    'New Chat'
-  );
-}
-
+/**
+ * Extracts the display name from an app user, with fallback to email addresses.
+ * @param user - The app user object
+ * @returns The display name, email, or null if no suitable value is found
+ */
 function getDisplayNameFromAppUser(user?: RemoteAppUserRow) {
   if (!user) {
     return null;

@@ -6,12 +6,13 @@ The `backend/` Express service is not part of the main mobile runtime path right
 
 ## Current Runtime Components
 
-1. **Mobile App:** Expo React Native app with React Navigation, Clerk auth, SQLite repositories, sync services, and local AI screens.
+1. **Mobile App:** Expo React Native app with React Navigation, Clerk auth, SQLite repositories, sync services, offline mesh integration, and local AI screens.
 2. **Local SQLite:** Primary local store for conversations, contacts, messages, sync state, and offline access.
 3. **Clerk:** Authentication provider and source of the Supabase-compatible JWT template named `supabase`.
 4. **Supabase:** Remote PostgreSQL persistence, row-level security, realtime message delivery, user directory lookup, and RAG message search RPC.
-5. **On-device Llama:** `llama.rn` loads a downloaded GGUF model from app document storage for summaries, reply suggestions, and RAG answer generation.
-6. **Optional Express Backend:** Standalone Ollama bridge under `backend/`; currently not called by the mobile app.
+5. **Offline Mesh Service:** P2P mesh network using `@offline-protocol/mesh-sdk` with Bluetooth Low Energy (BLE) and Wi-Fi Direct (on Android) transports, plus MLS (Message Layer Security) end-to-end encrypted session establishment and recovery.
+6. **On-device Llama:** `llama.rn` loads a downloaded GGUF model from app document storage for summaries, reply suggestions, and RAG answer generation.
+7. **Optional Express Backend:** Standalone Ollama bridge under `backend/`; currently not called by the mobile app.
 
 ## High-Level System
 
@@ -40,6 +41,12 @@ flowchart TD
     RagSearch --> SupabaseRPC["search_conversation_messages RPC"]
     SupabaseRPC --> Supabase
     RagSearch --> LocalAI
+
+    Mobile --> Mesh["Offline Mesh Service"]
+    Mesh --> MeshSDK["@offline-protocol/mesh-sdk"]
+    MeshSDK <--> BLE["Bluetooth LE Transport"]
+    MeshSDK <--> WiFi["Wi-Fi Direct (Android)"]
+    MeshSDK <--> MLS["MLS (Message Layer Security)"]
 
     OptionalBackend["Optional Express Backend"] -. legacy/optional .-> Ollama["Ollama"]
 ```
@@ -86,6 +93,38 @@ sequenceDiagram
     RT-->>Sync: Incoming message event
     Sync->>DB: Save incoming message locally
     DB-->>App: Chat updates from SQLite
+```
+
+## Offline Mesh Architecture
+
+The app supports complete offline communication with nearby devices when there is no internet access. 
+
+1. **Peer Discovery & Transport:** The app uses `@offline-protocol/mesh-sdk` to scan, advertise, and discover peer devices over Bluetooth Low Energy (BLE) and Wi-Fi Direct (on Android).
+2. **Link Handshake:** Once discovered, a low-level BLE connection handles MTU handshakes. The diagnostic listener validates when the MTU payload is flushed to Rust.
+3. **MLS Secure Sessions:** After the link is ready, the `offlineMeshService` negotiates an MLS (Message Layer Security) secure session with the peer to establish end-to-end encryption.
+4. **Message Priority & Queueing:** Messages are queued with High Priority, retried automatically by the SDK, and marked as delivered or failed based on event callbacks.
+
+```mermaid
+sequenceDiagram
+    participant U as User A (Sender)
+    participant AppA as Mobile App A
+    participant MeshA as OfflineMeshService A
+    participant MeshB as OfflineMeshService B
+    participant AppB as Mobile App B (Recipient)
+
+    MeshA->>MeshB: Peer Discovery (BLE / Wi-Fi Direct)
+    MeshB-->>MeshA: neighbor_discovered Event
+
+    Note over MeshA, MeshB: BLE MTU handshake & link ready (diagnostic status)
+    MeshA->>MeshB: establishSecureSession (MLS Key Exchange)
+    MeshB-->>MeshA: MLS session established
+
+    U->>AppA: Send message offline
+    AppA->>MeshA: sendOfflineChatMessage
+    MeshA->>MeshB: Encrypted Payload (MessagePriority.High)
+    MeshB-->>MeshA: message_delivered Event
+    MeshA-->>AppA: Confirm delivery success
+    MeshB->>AppB: message_received Event -> Save to SQLite
 ```
 
 ## AI Architecture
@@ -176,6 +215,7 @@ This service type-checks independently, but the mobile app currently has no back
 | `llama.rn` | Runs the local Llama model on-device |
 | Local AI model service | Downloads, checks, loads, releases, and deletes the GGUF model |
 | RAG search service | Calls Supabase full-text search RPC for relevant conversation messages |
+| Offline Mesh Service | P2P message delivery using BLE & Wi-Fi Direct and MLS security |
 | Optional backend | Legacy/optional Ollama bridge; not wired into the main app |
 
-In short, the main product architecture is **mobile app + SQLite + Supabase + local Llama**. The backend is currently separate and optional.
+In short, the main product architecture is **mobile app + SQLite + Supabase + local Llama + Offline Mesh**. The backend is currently separate and optional.

@@ -43,6 +43,10 @@ async function getDb() {
   return db;
 }
 
+/**
+ * Retrieves the currently logged-in user from the session.
+ * @returns The current user row if a session exists, null otherwise
+ */
 export async function getCurrentUser(): Promise<UserRow | null> {
   const db = await getDb();
 
@@ -56,6 +60,12 @@ export async function getCurrentUser(): Promise<UserRow | null> {
   );
 }
 
+/**
+ * Authenticates a user with email and password, creating a new session on success.
+ * @param email - The user's email address
+ * @param password - The user's password
+ * @returns Success result or error message if authentication fails
+ */
 export async function login(email: string, password: string): Promise<AuthResult> {
   const db = await getDb();
   const normalizedEmail = email.trim().toLowerCase();
@@ -78,6 +88,13 @@ export async function login(email: string, password: string): Promise<AuthResult
   return { ok: true };
 }
 
+/**
+ * Registers a new user with name, email, and password, then creates a session.
+ * @param name - The user's display name
+ * @param email - The user's email address
+ * @param password - The user's password
+ * @returns Success result or error message if signup fails (e.g., email already exists)
+ */
 export async function signup(
   name: string,
   email: string,
@@ -113,6 +130,9 @@ export async function signup(
   return { ok: true };
 }
 
+/**
+ * Clears the current user session from the database.
+ */
 export async function logout() {
   const db = await getDb();
   await db.runAsync('DELETE FROM session;');

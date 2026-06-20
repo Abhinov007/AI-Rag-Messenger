@@ -6,27 +6,30 @@
 [![Clerk](https://img.shields.io/badge/Clerk-Auth-6C47FF?logo=clerk&logoColor=white)](https://clerk.com/)
 [![llama.rn](https://img.shields.io/badge/llama.rn-Local_AI-orange)](https://github.com/mybigday/llama.rn)
 
-AIRagMessenger is an offline-first mobile chat app with private local AI features. It stores messages locally in SQLite, syncs conversations through Supabase, authenticates users with Clerk, and can answer grounded questions about a chat by retrieving relevant messages and generating the answer on-device with Llama.
+AIRagMessenger is an offline-first mobile chat app with private local AI and secure peer-to-peer offline mesh features. It stores messages locally in SQLite, syncs conversations through Supabase when online, and routes messages over Bluetooth Low Energy (BLE) and Wi-Fi Direct when offline. It authenticates users with Clerk, and can answer grounded questions about a chat by retrieving relevant messages and generating the answer on-device with Llama.
 
 ## Key Features
 
 - **Offline-first messaging:** Messages are written to local SQLite immediately, then synced in the background.
+- **P2P Offline Mesh Networking:** When completely disconnected, the app uses `@offline-protocol/mesh-sdk` to scan, discover, and deliver secure messages to nearby peers using Bluetooth Low Energy (BLE) and Wi-Fi Direct.
+- **MLS Secure Sessions:** Integrates Message Layer Security (MLS) protocol to automatically establish end-to-end encrypted messaging sessions with local peers.
 - **Cloud sync and realtime delivery:** Supabase stores synced conversations and messages, with realtime subscriptions for incoming chat updates.
 - **Clerk authentication:** Clerk handles sign-in, sign-up, secure token caching, and Supabase JWT integration.
 - **Local AI model management:** The Local AI settings screen downloads, deletes, and tests the on-device `Llama-3.2-1B-Instruct-Q4_K_M.gguf` model.
 - **AI chat tools:** Generate summaries, reply suggestions, and grounded answers from inside a conversation.
 - **RAG message search:** Supabase full-text search retrieves relevant synced messages, then the local Llama model answers using only those sources.
-- **Mobile-native build:** The app uses native modules such as `expo-sqlite`, `expo-secure-store`, and `llama.rn`, so it should be run as a dev build or native Android/iOS app.
+- **Mobile-native build:** The app uses native modules such as `expo-sqlite`, `expo-secure-store`, `llama.rn`, and native BLE capabilities, so it should be run as a dev build or native Android/iOS app.
 
 ## Architecture
 
-The app follows an offline-first flow:
+The app follows an offline-first hybrid flow:
 
-1. The React Native UI reads and writes chat data through local SQLite repositories.
-2. Background sync pushes pending local messages and pulls remote changes from Supabase.
-3. Supabase Realtime notifies active chats about newly inserted messages.
-4. Clerk issues the `supabase` JWT used by the mobile app for authenticated Supabase access.
-5. For "Ask about this chat", Supabase searches synced message text and the local Llama model generates a grounded answer with source messages.
+1. **Local storage first:** The React Native UI reads and writes chat data through local SQLite repositories.
+2. **P2P Mesh routing (offline):** When peers are nearby and offline, messages are routed directly over Bluetooth/Wi-Fi Direct.
+3. **Background cloud sync:** Background sync pushes pending local messages and pulls remote changes from Supabase once an internet connection is established.
+4. **Supabase Realtime:** Supabase Realtime notifies active chats about newly inserted remote messages when online.
+5. **Clerk Auth:** Clerk issues the `supabase` JWT used by the mobile app for authenticated Supabase access.
+6. **Local RAG & Llama:** For "Ask about this chat", Supabase searches synced message text and the local Llama model generates a grounded answer with source messages.
 
 See [docs/architecture.md](docs/architecture.md) for more detail.
 
@@ -144,6 +147,7 @@ See [backend/README.md](backend/README.md) for backend setup details.
 - **Local storage:** Expo SQLite
 - **Remote storage:** Supabase PostgreSQL, RLS, Realtime, RPC
 - **Auth:** Clerk Expo
+- **Offline Mesh:** `@offline-protocol/mesh-sdk` (P2P via BLE & Wi-Fi Direct), MLS session security
 - **On-device AI:** `llama.rn`, Llama 3.2 1B GGUF
 - **Optional AI backend:** Node.js, Express, Ollama
 

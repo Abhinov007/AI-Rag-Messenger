@@ -31,6 +31,7 @@ type ConversationRow = {
   contact_email: string | null;
   contact_normalized_email: string | null;
   contact_clerk_user_id: string | null;
+  participant_key: string | null;
 };
 
 type ConversationListRow = ConversationRow & {
@@ -56,6 +57,7 @@ function mapConversation(row: ConversationRow): Conversation {
     contactEmail: row.contact_email,
     contactNormalizedEmail: row.contact_normalized_email,
     contactClerkUserId: row.contact_clerk_user_id,
+    participantKey: row.participant_key,
   };
 }
 
@@ -155,6 +157,7 @@ export async function getConversations(
       conversations.contact_email,
       conversations.contact_normalized_email,
       conversations.contact_clerk_user_id,
+      conversations.participant_key,
       COALESCE(
         conversations.last_message,
         (
@@ -227,20 +230,21 @@ export async function getConversationById(
   const scoped = applyConversationAccessScope(
     `
     SELECT
-      id,
-      title,
-      created_at,
-      updated_at,
-      remote_id,
-      synced,
-      sync_error,
-      owner_clerk_user_id,
-      contact_name,
-      contact_email,
-      contact_normalized_email,
-      contact_clerk_user_id
-    FROM conversations
-    WHERE id = ?
+  id,
+  title,
+  created_at,
+  updated_at,
+  remote_id,
+  synced,
+  sync_error,
+  owner_clerk_user_id,
+  contact_name,
+  contact_email,
+  contact_normalized_email,
+  contact_clerk_user_id,
+  participant_key
+FROM conversations
+WHERE id = ?
     `,
     currentClerkUserId,
   );
@@ -522,6 +526,7 @@ export async function upsertPulledConversation({
   contactEmail,
   contactNormalizedEmail,
   contactClerkUserId,
+  participantKey,
   createdAt,
   updatedAt,
 }: {
@@ -532,6 +537,7 @@ export async function upsertPulledConversation({
   contactEmail: string | null;
   contactNormalizedEmail: string | null;
   contactClerkUserId: string | null;
+  participantKey: string | null;
   createdAt: string;
   updatedAt: string;
 }) {
@@ -553,17 +559,18 @@ export async function upsertPulledConversation({
     await db.runAsync(
       `
       UPDATE conversations
-      SET title = ?,
-          owner_clerk_user_id = ?,
-          contact_name = ?,
-          contact_email = ?,
-          contact_normalized_email = ?,
-          contact_clerk_user_id = ?,
-          synced = 1,
-          sync_error = NULL,
-          created_at = ?,
-          updated_at = ?
-      WHERE id = ?;
+SET title = ?,
+    owner_clerk_user_id = ?,
+    contact_name = ?,
+    contact_email = ?,
+    contact_normalized_email = ?,
+    contact_clerk_user_id = ?,
+    participant_key = ?,
+    synced = 1,
+    sync_error = NULL,
+    created_at = ?,
+    updated_at = ?
+WHERE id = ?;
       `,
       [
         title,
@@ -572,6 +579,7 @@ export async function upsertPulledConversation({
         contactEmail,
         contactNormalizedEmail,
         contactClerkUserId,
+        participantKey,
         normalizedCreatedAt,
         normalizedUpdatedAt,
         existingByRemoteId.id,
@@ -606,19 +614,19 @@ export async function upsertPulledConversation({
   if (existingBetweenUsers?.id) {
     await db.runAsync(
       `
-      UPDATE conversations
-      SET remote_id = ?,
-          title = ?,
-          owner_clerk_user_id = ?,
-          contact_name = ?,
-          contact_email = ?,
-          contact_normalized_email = ?,
-          contact_clerk_user_id = ?,
-          synced = 1,
-          sync_error = NULL,
-          created_at = ?,
-          updated_at = ?
-      WHERE id = ?;
+      [
+  remoteId,
+  title,
+  ownerClerkUserId,
+  contactName,
+  contactEmail,
+  contactNormalizedEmail,
+  contactClerkUserId,
+  participantKey,
+  normalizedCreatedAt,
+  normalizedUpdatedAt,
+  existingBetweenUsers.id,
+]
       `,
       [
         remoteId,
@@ -639,23 +647,24 @@ export async function upsertPulledConversation({
 
   const result = await db.runAsync(
     `
-    INSERT INTO conversations
-    (
-      title,
-      remote_id,
-      owner_clerk_user_id,
-      contact_name,
-      contact_email,
-      contact_normalized_email,
-      contact_clerk_user_id,
-      synced,
-      sync_error,
-      hidden_for_user,
-      hidden_at,
-      created_at,
-      updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, 0, NULL, ?, ?);
+INSERT INTO conversations
+(
+  title,
+  remote_id,
+  owner_clerk_user_id,
+  contact_name,
+  contact_email,
+  contact_normalized_email,
+  contact_clerk_user_id,
+  participant_key,
+  synced,
+  sync_error,
+  hidden_for_user,
+  hidden_at,
+  created_at,
+  updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, 0, NULL, ?, ?);
     `,
     [
       title,
@@ -665,6 +674,7 @@ export async function upsertPulledConversation({
       contactEmail,
       contactNormalizedEmail,
       contactClerkUserId,
+      participantKey,
       normalizedCreatedAt,
       normalizedUpdatedAt,
     ],

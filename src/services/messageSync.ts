@@ -24,11 +24,21 @@ type RemoteMessageRow = {
 
 type GetClerkToken = () => Promise<string | null>;
 
+/**
+ * Syncs a single message to Supabase by its ID, if it hasn't been synced yet.
+ * @param messageId - The local message ID to sync
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws Error if clerkUserId is missing or if the sync fails
+ */
 export async function syncMessageById(
   messageId: number,
   clerkUserId: string,
   getClerkToken: GetClerkToken,
 ) {
+  if (!clerkUserId) {
+    throw new Error('clerkUserId is required to sync a message.');
+  }
   const message = await getMessageById(messageId, clerkUserId);
 
   if (!message || message.synced) {
@@ -38,6 +48,13 @@ export async function syncMessageById(
   await pushMessageToSupabase(message, clerkUserId, getClerkToken);
 }
 
+/**
+ * Syncs all unsynced messages for the current user to Supabase.
+ * Attempts to push each message and collects any errors that occur.
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws AggregateError if one or more messages fail to sync
+ */
 export async function syncPendingMessages(
   clerkUserId: string,
   getClerkToken: GetClerkToken,
@@ -64,6 +81,13 @@ export async function syncPendingMessages(
   throwIfFailures(failures, 'One or more messages failed to sync to Supabase.');
 }
 
+/**
+ * Retrieves the remote conversation ID for a message's conversation, syncing if necessary.
+ * @param message - The local message object
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @returns The remote conversation ID, or null if the conversation cannot be synced
+ */
 async function getRemoteConversationIdForMessage(
   message: Message,
   clerkUserId: string,
@@ -95,6 +119,14 @@ async function getRemoteConversationIdForMessage(
   return null;
 }
 
+/**
+ * Pushes a single message to Supabase, creating or updating the remote record.
+ * Handles duplicate message errors by recovering the existing remote ID.
+ * @param message - The local message to push
+ * @param clerkUserId - The current user's Clerk ID
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @throws Error if the push fails or if the conversation has not been synced
+ */
 async function pushMessageToSupabase(
   message: Message,
   clerkUserId: string,
@@ -161,6 +193,25 @@ async function pushMessageToSupabase(
     .single<RemoteMessageRow>();
 
   if (error) {
+    const isNetworkError =
+      error.message?.includes('Network request failed') ||
+      error.message?.includes('fetch');
+
+    if (isNetworkError) {
+      console.warn('Supabase sync deferred: device appears to be offline.', {
+        localId: message.id,
+      });
+      throw error; // Let the caller handle the retry/queue logic.
+    }
+
+    console.error('Supabase message sync ERROR:', {
+      localId: message.id,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+
     const isDuplicateError =
       error.code === '23505' ||
       error.message.includes('duplicate key value') ||

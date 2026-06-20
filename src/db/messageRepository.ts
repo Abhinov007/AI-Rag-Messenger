@@ -25,6 +25,7 @@ type MessageRow = {
   remote_id: string | null;
   sync_error: string | null;
   synced: number;
+  offline_synced?: number;
   deleted_for_user?: number;
   deleted_at?: string | null;
   created_at: string;
@@ -51,6 +52,7 @@ function mapMessage(row: MessageRow): Message {
     summary: row.summary ?? null,
     syncError: row.sync_error ?? null,
     synced: row.synced !== 0,
+    offlineSynced: row.offline_synced !== 0,
   };
 }
 
@@ -140,6 +142,7 @@ function buildMessageHistoryQuery(currentClerkUserId?: string) {
         remote_id,
         sync_error,
         synced,
+        offline_synced,
         deleted_for_user,
         deleted_at,
         created_at,
@@ -161,6 +164,7 @@ function buildMessageHistoryQuery(currentClerkUserId?: string) {
         remote_id,
         sync_error,
         synced,
+        0 AS offline_synced,
         deleted_for_user,
         deleted_at,
         created_at,
@@ -222,6 +226,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
   const body = message.body.trim();
   const summary = message.summary ?? null;
   const synced = message.synced ? 1 : 0;
+  const offlineSynced = message.offlineSynced ? 1 : 0;
   const senderClerkUserId = message.senderClerkUserId ?? null;
   const createdAt =
     normalizeUtcTimestamp(message.createdAt) ?? getUtcNowIsoTimestamp();
@@ -235,6 +240,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
           body = ?,
           summary = ?,
           synced = ?,
+          offline_synced = ?,
           sync_error = NULL
       WHERE id = ? AND conversation_id = ?;
       `,
@@ -244,6 +250,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
         body,
         summary,
         synced,
+        offlineSynced,
         message.id,
         message.conversationId,
       ],
@@ -263,9 +270,10 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       summary,
       created_at,
       synced,
+      offline_synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, NULL);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL);
     `,
     [
       message.conversationId,
@@ -275,6 +283,7 @@ export async function saveMessage(message: MessageSaveInput): Promise<number> {
       summary,
       createdAt,
       synced,
+      offlineSynced,
     ],
   );
 
@@ -307,6 +316,7 @@ export async function getMessagesByConversationId(
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -381,6 +391,7 @@ export async function getMessagePageByConversationId({
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -428,6 +439,7 @@ export async function getMessageById(
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -474,6 +486,7 @@ export async function getUnsyncedMessages(
       remote_id,
       sync_error,
       synced,
+      offline_synced,
       deleted_for_user,
       deleted_at,
       created_at,
@@ -555,9 +568,10 @@ export async function addMessage(
       body,
       created_at,
       synced,
+      offline_synced,
       sync_error
     )
-    VALUES (?, ?, ?, ?, ?, 0, NULL);
+    VALUES (?, ?, ?, ?, ?, 0, 0, NULL);
     `,
     [
       conversationId,
@@ -608,6 +622,81 @@ export async function markMessageSyncedWithRemoteId(
   remoteId: string,
 ) {
   const db = await getDatabase();
+
+  /*
+   * Defensive merge:
+   * Sometimes a remote message is already pulled into SQLite before the old
+   * unsynced local row gets marked with the same remote_id.
+   *
+   * If we blindly UPDATE remote_id here, SQLite throws:
+   * UNIQUE constraint failed: messages.remote_id
+   */
+  const existingRemoteMessage = await db.getFirstAsync<{ id: number }>(
+    `
+    SELECT id
+    FROM messages
+    WHERE remote_id = ?
+      AND id != ?
+    LIMIT 1;
+    `,
+    [remoteId, messageId],
+  );
+
+  if (existingRemoteMessage?.id) {
+    console.warn('Merging duplicate local message after Supabase sync:', {
+      messageId,
+      existingMessageId: existingRemoteMessage.id,
+      remoteId,
+    });
+
+    await db.runAsync(
+      `
+      UPDATE messages
+      SET synced = 1,
+          sync_error = NULL
+      WHERE id = ?;
+      `,
+      [existingRemoteMessage.id],
+    );
+
+    await db.runAsync(
+      `
+      DELETE FROM messages
+      WHERE id = ?;
+      `,
+      [messageId],
+    );
+
+    return;
+  }
+
+  const archivedRemoteMessage = await db.getFirstAsync<{ id: number }>(
+    `
+    SELECT id
+    FROM messages_archive
+    WHERE remote_id = ?
+    LIMIT 1;
+    `,
+    [remoteId],
+  );
+
+  if (archivedRemoteMessage?.id) {
+    console.warn('Dropping duplicate local message because remote row is archived:', {
+      messageId,
+      archivedMessageId: archivedRemoteMessage.id,
+      remoteId,
+    });
+
+    await db.runAsync(
+      `
+      DELETE FROM messages
+      WHERE id = ?;
+      `,
+      [messageId],
+    );
+
+    return;
+  }
 
   await db.runAsync(
     `
@@ -696,10 +785,9 @@ export async function upsertRemoteMessageLocally({
 
   const existing = await db.getFirstAsync<{
     id: number;
-    deleted_for_user?: number;
   }>(
     `
-    SELECT id, deleted_for_user
+    SELECT id
     FROM messages
     WHERE remote_id = ?
     LIMIT 1;
@@ -718,7 +806,9 @@ export async function upsertRemoteMessageLocally({
           summary = ?,
           created_at = ?,
           synced = 1,
-          sync_error = NULL
+          sync_error = NULL,
+          deleted_for_user = 0,
+          deleted_at = NULL
       WHERE id = ?;
       `,
       [
@@ -763,39 +853,142 @@ export async function upsertRemoteMessageLocally({
     return archived.id;
   }
 
-  const result = await db.runAsync(
-    `
-    INSERT INTO messages
-    (
-      conversation_id,
-      sender_type,
-      sender_clerk_user_id,
-      body,
-      summary,
-      remote_id,
-      synced,
-      sync_error,
-      created_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?);
-    `,
-    [
-      conversationId,
-      senderType,
-      senderClerkUserId ?? null,
-      body,
-      summary ?? null,
-      remoteId,
-      normalizedCreatedAt,
-    ],
-  );
-
-  await touchConversationAfterMessage(
-    db,
+  try {
+  console.log('addMessage saving to SQLite:', {
     conversationId,
+    senderType,
+    senderClerkUserId,
     body,
-    normalizedCreatedAt,
-  );
+    createdAt: normalizedCreatedAt,
+  });
 
-  return Number(result.lastInsertRowId);
+  const result = await db.runAsync(
+      `
+      INSERT INTO messages
+      (
+        conversation_id,
+        sender_type,
+        sender_clerk_user_id,
+        body,
+        summary,
+        remote_id,
+        synced,
+        sync_error,
+        deleted_for_user,
+        deleted_at,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 1, NULL, 0, NULL, ?);
+      `,
+      [
+        conversationId,
+        senderType,
+        senderClerkUserId ?? null,
+        body,
+        summary ?? null,
+        remoteId,
+        normalizedCreatedAt,
+      ],
+    );
+
+    await touchConversationAfterMessage(
+      db,
+      conversationId,
+      body,
+      normalizedCreatedAt,
+    );
+
+    return Number(result.lastInsertRowId);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+
+    const isRemoteIdDuplicate =
+      message.includes('UNIQUE constraint failed') &&
+      message.includes('messages.remote_id');
+
+    if (!isRemoteIdDuplicate) {
+      throw error;
+    }
+
+    /*
+     * Defensive fallback:
+     * If another pull/realtime handler inserted the same remote_id between
+     * our SELECT and INSERT, update that row instead of crashing.
+     */
+    const duplicate = await db.getFirstAsync<{ id: number }>(
+      `
+      SELECT id
+      FROM messages
+      WHERE remote_id = ?
+      LIMIT 1;
+      `,
+      [remoteId],
+    );
+
+    if (!duplicate?.id) {
+      throw error;
+    }
+
+    await db.runAsync(
+      `
+      UPDATE messages
+      SET conversation_id = ?,
+          sender_type = ?,
+          sender_clerk_user_id = ?,
+          body = ?,
+          summary = ?,
+          created_at = ?,
+          synced = 1,
+          sync_error = NULL,
+          deleted_for_user = 0,
+          deleted_at = NULL
+      WHERE id = ?;
+      `,
+      [
+        conversationId,
+        senderType,
+        senderClerkUserId ?? null,
+        body,
+        summary ?? null,
+        normalizedCreatedAt,
+        duplicate.id,
+      ],
+    );
+
+    await touchConversationAfterMessage(
+      db,
+      conversationId,
+      body,
+      normalizedCreatedAt,
+    );
+
+    return duplicate.id;
+  }
+}
+
+export async function markMessageOfflineSynced(messageId: number) {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    UPDATE messages
+    SET offline_synced = 1
+    WHERE id = ?;
+    `,
+    [messageId],
+  );
+}
+
+export async function clearMessageSyncError(messageId: number): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+    UPDATE messages
+    SET sync_error = NULL
+    WHERE id = ?;
+    `,
+    [messageId],
+  );
 }

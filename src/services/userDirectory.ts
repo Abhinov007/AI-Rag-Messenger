@@ -9,10 +9,23 @@ export type AppUser = {
   display_name: string | null;
 };
 
+/**
+ * Normalizes an email address by trimming whitespace and converting to lowercase.
+ * @param email - The email address to normalize
+ * @returns The normalized email string
+ */
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+/**
+ * Registers or updates the current user in the app user directory.
+ * Creates or updates a user record in Supabase with email and display name.
+ * @param clerkUserId - The user's Clerk ID
+ * @param email - The user's email address
+ * @param displayName - Optional display name for the user
+ * @param getClerkToken - Function to get the Clerk authentication token
+ */
 export async function registerCurrentUserInDirectory({
   clerkUserId,
   email,
@@ -56,6 +69,13 @@ export async function registerCurrentUserInDirectory({
   });
 }
 
+/**
+ * Finds an app user by their email address.
+ * @param email - The email address to search for
+ * @param getClerkToken - Function to get the Clerk authentication token
+ * @returns The app user if found, null otherwise
+ * @throws Error if Supabase client cannot be created or if the query fails
+ */
 export async function findAppUserByEmail({
   email,
   getClerkToken,
